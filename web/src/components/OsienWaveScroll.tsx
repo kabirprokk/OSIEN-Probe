@@ -1,4 +1,5 @@
 import { type KeyboardEvent, useEffect, useRef } from 'react';
+import { getDeviceQualityProfile } from '../lib/deviceProfile';
 
 /**
  * OSIEN Signature Sine-Wave Scroll Bar — Interactive (Click & Drag to Scrub Page Scroll)
@@ -14,11 +15,12 @@ export function OsienWaveScroll() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    const quality = getDeviceQualityProfile();
     const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     let width = window.innerWidth;
     const height = 36;
     const padX = 20;
-    let dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let dpr = Math.min(window.devicePixelRatio || 1, quality.maxDpr);
 
     const resize = () => {
       width = window.innerWidth;
@@ -106,9 +108,9 @@ export function OsienWaveScroll() {
       rafId = requestAnimationFrame(draw);
       if (document.hidden) return;
 
-      // Throttle idle redraw to ~20fps when not scrolling/hovering to keep CPU usage near 0%
+      // Throttle idle redraw based on device tier to keep CPU usage near 0%
       const active = isDragging || hoverX !== null || Math.abs(velocity) > 0.25 || Math.abs(targetProgress - smoothProgress) > 0.002;
-      if (!active && now - lastDraw < 50) return;
+      if (!active && now - lastDraw < quality.waveIdleIntervalMs) return;
       lastDraw = now;
 
       const t = (now - start) / 1000;

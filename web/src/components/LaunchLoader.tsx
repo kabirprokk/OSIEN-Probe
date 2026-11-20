@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
+import { getDeviceQualityProfile } from '../lib/deviceProfile';
 
 interface LaunchLoaderProps {
   realProgress: number; // 0..100 from real GLB + Draco + WebGL shader warmup + fonts
@@ -56,14 +57,15 @@ export function LaunchLoader({ realProgress, sceneReady, onComplete }: LaunchLoa
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    const quality = getDeviceQualityProfile();
     let width = window.innerWidth;
     let height = window.innerHeight;
-    let dpr = Math.min(window.devicePixelRatio || 1, 1.75);
+    let dpr = Math.min(window.devicePixelRatio || 1, quality.maxDpr);
 
     const resize = () => {
       width = window.innerWidth;
       height = window.innerHeight;
-      dpr = Math.min(window.devicePixelRatio || 1, 1.75);
+      dpr = Math.min(window.devicePixelRatio || 1, quality.maxDpr);
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       canvas.style.width = `${width}px`;
@@ -73,8 +75,8 @@ export function LaunchLoader({ realProgress, sceneReady, onComplete }: LaunchLoa
     resize();
     window.addEventListener('resize', resize, { passive: true });
 
-    // Background stars
-    const stars = Array.from({ length: 130 }, (_, i) => ({
+    // Background stars scaled to device tier
+    const stars = Array.from({ length: quality.loaderStars }, (_, i) => ({
       x: Math.random() * width,
       y: Math.random() * height,
       r: 0.6 + Math.random() * 1.3,
@@ -82,8 +84,8 @@ export function LaunchLoader({ realProgress, sceneReady, onComplete }: LaunchLoa
       lime: i % 9 === 0,
     }));
 
-    // Swirling accretion disk particles around the Black Hole
-    const diskParticles: DiskParticle[] = Array.from({ length: 95 }, (_, i) => ({
+    // Swirling accretion disk particles around the Black Hole scaled to device tier
+    const diskParticles: DiskParticle[] = Array.from({ length: quality.loaderDiskParticles }, (_, i) => ({
       angle: Math.random() * Math.PI * 2,
       radius: 1.28 + Math.random() * 1.45,
       speed: 0.65 + Math.random() * 1.35,

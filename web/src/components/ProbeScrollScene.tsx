@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { getDeviceQualityProfile } from '../lib/deviceProfile';
 
 interface ScrollKeyframe {
   t: number;
@@ -101,6 +103,7 @@ export function ProbeScrollScene({ dimmed = false, onProgress, onReady }: ProbeS
     const host = hostRef.current;
     if (!host) return;
 
+    const quality = getDeviceQualityProfile();
     const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const width = window.innerWidth;
     const height = window.innerHeight;
@@ -110,36 +113,46 @@ export function ProbeScrollScene({ dimmed = false, onProgress, onReady }: ProbeS
     camera.position.set(0, 0, 7.6);
 
     const renderer = new THREE.WebGLRenderer({
-      antialias: true,
+      antialias: quality.antialias,
       alpha: true,
-      powerPreference: 'high-performance',
+      powerPreference: quality.tier === 'eco' ? 'low-power' : 'high-performance',
     });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    let activeDpr = Math.min(window.devicePixelRatio || 1, quality.maxDpr);
+    renderer.setPixelRatio(activeDpr);
     renderer.setSize(width, height);
     renderer.setClearColor(0x000000, 0);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.18;
+    renderer.toneMappingExposure = 1.12;
     host.appendChild(renderer.domElement);
 
-    // Zero-PMREM-overhead crisp 60% Black / 30% White / 10% Electric Lime Studio Lighting
-    const hemi = new THREE.HemisphereLight('#ffffff', '#0c0c0c', 1.1);
+    // Full RoomEnvironment PBR reflections on ultra & balanced hardware; skipped only on eco/software GPUs
+    let envRT: THREE.WebGLRenderTarget | null = null;
+    if (quality.tier !== 'eco') {
+      const pmrem = new THREE.PMREMGenerator(renderer);
+      envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
+      scene.environment = envRT.texture;
+      pmrem.dispose();
+    }
+
+    // 60% Black / 30% White / 10% Electric Lime Studio Lighting
+    const hemi = new THREE.HemisphereLight('#ffffff', '#080808', quality.tier === 'eco' ? 1.1 : 0.72);
     scene.add(hemi);
 
-    const keyLight = new THREE.DirectionalLight('#ffffff', 2.8);
+    const keyLight = new THREE.DirectionalLight('#ffffff', quality.tier === 'eco' ? 2.8 : 2.45);
     keyLight.position.set(6, 7, 6);
     scene.add(keyLight);
 
-    const limeRim = new THREE.DirectionalLight('#a3ff12', 2.9);
+    const limeRim = new THREE.DirectionalLight('#a3ff12', 2.75);
     limeRim.position.set(-7, 2.5, -4.5);
     scene.add(limeRim);
 
-    const fillLight = new THREE.DirectionalLight('#e8e8e8', 1.25);
+    const fillLight = new THREE.DirectionalLight('#e4e4e4', quality.tier === 'eco' ? 1.2 : 0.9);
     fillLight.position.set(-3, -4, 4);
     scene.add(fillLight);
 
-    // Calibrated deep-space White + 10% Lime starfield
-    const starCount = 240;
+    // Calibrated deep-space White + 10% Lime starfield scaled to device tier
+    const starCount = quality.starCount;
     const positions = new Float32Array(starCount * 3);
     const colors = new Float32Array(starCount * 3);
     const cLime = new THREE.Color('#a3ff12');
@@ -317,11 +330,31 @@ export function ProbeScrollScene({ dimmed = false, onProgress, onReady }: ProbeS
     window.addEventListener('resize', onResize, { passive: true });
 
     let rafId = 0;
+    let lastFrameTs = 0;
+    let frameIntervalMs = 1000 / quality.targetFps;
+    let slowFrames = 0;
+    let hasDownshifted = false;
     const clock = new THREE.Clock();
 
-    const animate = () => {
+    const animate = (now: number) => {
       rafId = requestAnimationFrame(animate);
       if (document.hidden) return;
+      if (now - lastFrameTs < frameIntervalMs - 1) return;
+      const frameMs = lastFrameTs > 0 ? now - lastFrameTs : 16.6;
+      lastFrameTs = now;
+
+      // Dynamic FPS watchdog: if device sustains < 30fps, smoothly step down DPR while keeping all 3D details
+      if (!hasDownshifted && modelLoaded && frameMs > 36) {
+        slowFrames += 1;
+        if (slowFrames >= 24) {
+          hasDownshifted = true;
+          activeDpr = Math.max(0.85, activeDpr * 0.78);
+          renderer.setPixelRatio(activeDpr);
+          frameIntervalMs = 1000 / 30;
+        }
+      } else if (slowFrames > 0) {
+        slowFrames = Math.max(0, slowFrames - 1);
+      }
 
       const dt = Math.min(clock.getDelta(), 0.05);
       const elapsed = clock.getElapsedTime();
@@ -366,7 +399,7 @@ export function ProbeScrollScene({ dimmed = false, onProgress, onReady }: ProbeS
       renderer.render(scene, camera);
     };
 
-    animate();
+    rafId = requestAnimationFrame(animate);
 
     return () => {
       disposed = true;
@@ -375,6 +408,7 @@ export function ProbeScrollScene({ dimmed = false, onProgress, onReady }: ProbeS
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('resize', onResize);
       dracoLoader.dispose();
+      envRT?.dispose();
       starGeo.dispose();
       starMat.dispose();
       orbitGeo.dispose();

@@ -21,6 +21,7 @@ import { OsienWaveScroll } from './components/OsienWaveScroll';
 import { DiamondCursor } from './components/DiamondCursor';
 import { LaunchLoader } from './components/LaunchLoader';
 import { BlackHoleTransition } from './components/BlackHoleTransition';
+import { getDeviceQualityProfile } from './lib/deviceProfile';
 const DecryptedText = lazy(() => import('./components/DecryptedText'));
 
 const ProbeScrollScene = lazy(async () => {
@@ -81,10 +82,16 @@ export default function App() {
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
   const [showTopBtn, setShowTopBtn] = useState(false);
 
-  // Skip blocking fullscreen preloader on mobile/reduced-motion/audit viewports for instant LCP
+  const quality = getDeviceQualityProfile();
+
+  useEffect(() => {
+    document.documentElement.dataset.quality = quality.tier;
+  }, [quality.tier]);
+
+  // Skip blocking fullscreen preloader only on eco/reduced-motion/audit environments for instant LCP
   const skipPreloader =
     typeof window !== 'undefined' &&
-    (window.innerWidth < 768 ||
+    (quality.tier === 'eco' ||
       window.matchMedia('(prefers-reduced-motion: reduce)').matches ||
       navigator.webdriver === true ||
       /Lighthouse|Chrome-Lighthouse|PageSpeed/i.test(navigator.userAgent));
@@ -164,9 +171,9 @@ export default function App() {
   );
   const sceneReady = modelReady && fontsReady;
 
-  // Smooth momentum scroll powered by Lenis (only when interactive 3D/effects are mounted)
+  // Smooth momentum scroll powered by Lenis (enabled automatically on ultra & balanced devices)
   useEffect(() => {
-    if (!mountHeavy3D) return;
+    if (!mountHeavy3D || !quality.enableSmoothScroll) return;
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     let alive = true;
     let rafId = 0;
@@ -197,7 +204,7 @@ export default function App() {
       cancelAnimationFrame(rafId);
       lenisInstance?.destroy();
     };
-  }, [mountHeavy3D]);
+  }, [mountHeavy3D, quality.enableSmoothScroll]);
 
   useEffect(() => {
     const onScroll = () => setShowTopBtn(window.scrollY > 520);
@@ -421,7 +428,7 @@ export default function App() {
                         reveal="letter"
                         dashLength={4}
                         dashGap={2}
-                        specks={15}
+                        specks={quality.techSpecks}
                         intro="none"
                         introDuration={2}
                         clickKick
@@ -798,7 +805,7 @@ export default function App() {
                     <Suspense fallback={<span className="tech-text-fallback">LOCAL.</span>}>
                       <ASCIIText
                         text="LOCAL."
-                        asciiFontSize={8}
+                        asciiFontSize={quality.asciiFontSize}
                         colors={['#ffffff', '#a3ff12', '#c2ff5c']}
                         textScale={1}
                         blocks={0.9}

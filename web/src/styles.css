@@ -2245,3 +2245,17 @@ main,
   content-visibility: auto;
   contain-intrinsic-size: auto 720px;
 }
+
+/* Adaptive GPU glass blur: full fidelity on ultra & balanced PCs, zero-cost solid obsidian on eco devices */
+html[data-quality='ultra'] .audit-shell,
+html[data-quality='ultra'] .feature-card,
+html[data-quality='ultra'] .steps li,
+html[data-quality='ultra'] .start-panel,
+html[data-quality='ultra'] .site-footer-wrap,
+html[data-quality='ultra'] .bh-transition,
+html[data-quality='balanced'] .audit-shell,
+html[data-quality='balanced'] .feature-card,
+html[data-quality='balanced'] .start-panel,
+html[data-quality='balanced'] .bh-transition {
+  backdrop-filter: blur(12px);
+}
