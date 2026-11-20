@@ -230,19 +230,19 @@ export function HistoryPage({ onBack, onOpenDocs }: HistoryPageProps) {
           <div className="docs-svg-card">
             <svg viewBox="0 0 920 170" role="img" aria-label="OSIEN Probe rule catalog growth from v1.0.0 to v1.0.5">
               {[
-                { label: 'v1.0.0  DeepCheck', count: '120+ rules', width: 120, y: 24, fill: 'rgba(255,255,255,0.28)' },
-                { label: 'v1.0.1  Probe + MCP', count: '482 rules', width: 270, y: 60, fill: 'rgba(255,255,255,0.52)' },
-                { label: 'v1.0.3  Polyglot AST', count: '551 rules', width: 325, y: 96, fill: 'rgba(255,255,255,0.78)' },
-                { label: 'v1.0.5  NOW (Ultra)', count: '1,142+ rules · 11 AST Call Graphs', width: 520, y: 132, fill: '#a3ff12' },
+                { label: 'v1.0.0  DeepCheck', count: '120+ rules', width: 98, y: 24, fill: 'rgba(255,255,255,0.28)' },
+                { label: 'v1.0.1  Probe + MCP', count: '482 rules', width: 222, y: 60, fill: 'rgba(255,255,255,0.52)' },
+                { label: 'v1.0.3  Polyglot AST', count: '551 rules', width: 268, y: 96, fill: 'rgba(255,255,255,0.78)' },
+                { label: 'v1.0.5  NOW (Ultra)', count: '1,142+ rules · 11 AST Call Graphs', width: 430, y: 132, fill: '#a3ff12' },
               ].map((bar) => (
                 <g key={bar.label}>
                   <text x="16" y={bar.y + 13} fill="#e0e0e0" fontFamily="JetBrains Mono, monospace" fontSize="11">
                     {bar.label}
                   </text>
-                  <rect x="200" y={bar.y} width="520" height="18" rx="3" fill="rgba(255,255,255,0.06)" />
+                  <rect x="200" y={bar.y} width="430" height="18" rx="3" fill="rgba(255,255,255,0.06)" />
                   <rect x="200" y={bar.y} width={bar.width} height="18" rx="3" fill={bar.fill} />
                   <text
-                    x="736"
+                    x="648"
                     y={bar.y + 13}
                     fill={bar.fill === '#a3ff12' ? '#a3ff12' : '#b3b3b3'}
                     fontFamily="JetBrains Mono, monospace"
