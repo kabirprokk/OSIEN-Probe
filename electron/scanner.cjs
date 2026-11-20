@@ -316,8 +316,8 @@ function dedupeByCweLocation(findings) {
         const existing = ordered[existingIdx];
         const curRank = sevRank[finding.severity] || 0;
         const oldRank = sevRank[existing.severity] || 0;
-        const curIsAst = /^(?:js-|type-|cfg-|py-|go-|sol-|polyglot-)/.test(finding.ruleId);
-        const oldIsAst = /^(?:js-|type-|cfg-|py-|go-|sol-|polyglot-)/.test(existing.ruleId);
+        const curIsAst = /^(?:js-|type-|cfg-|py-|go-|rust-|sol-|polyglot-)/.test(finding.ruleId);
+        const oldIsAst = /^(?:js-|type-|cfg-|py-|go-|rust-|sol-|polyglot-)/.test(existing.ruleId);
         if (curRank > oldRank || (curRank === oldRank && curIsAst && !oldIsAst)) {
           ordered[existingIdx] = finding;
         }
@@ -829,6 +829,11 @@ async function scanProjectRoot(root, kind, options = {}) {
       try { raw = await fs.readFile(full, 'utf8'); } catch { return null; }
       if (raw.includes('\u0000')) return null;
       const lang = langByExt[extName] || 'generic';
+      if ((lang === 'js' || lang === 'css') && raw.length > 4000) {
+        const sampleLines = raw.split(/\r?\n/, 40);
+        const maxLen = sampleLines.reduce((m, l) => Math.max(m, l.length), 0);
+        if (maxLen > 2000 || raw.length / Math.max(1, raw.split(/\r?\n/).length) > 350) return null;
+      }
       if (lang === 'js' && jsFiles.length < 400) jsFiles.push({ rel, raw, extName });
       if (['.py', '.go', '.rs'].includes(extName) && polyglotFiles.length < 400) polyglotFiles.push({ rel, raw, extName });
       return { lang, ...scanFileContent(raw, rel, extName, lang, catalog, applicableByLang) };
@@ -894,8 +899,15 @@ async function scanProjectRoot(root, kind, options = {}) {
   const testCommand = testPlan.testCommand || await detectTestCommand(scanRoot);
 
   const uniqueFindings = dedupeFindings(findings);
+  const TEST_FIXTURE_NOISE = new Set([
+    'go-tls-insecure-skip',
+    'flow-req-params-res-send-raw',
+    'mega-jsflow-req-headers-res-send',
+    'exp-js-express-json-no-limit',
+    'exp-js-express-trust-proxy-true',
+  ]);
   const filteredFindings = options.bugsOnly
-    ? dedupeByCweLocation(uniqueFindings.filter((f) => !STYLE_HINT_RULES.has(f.ruleId)))
+    ? dedupeByCweLocation(uniqueFindings.filter((f) => !STYLE_HINT_RULES.has(f.ruleId) && !(TEST_FILE_PATH.test(f.file) && TEST_FIXTURE_NOISE.has(f.ruleId))))
     : uniqueFindings;
   const selected = options.maxFindings ? filteredFindings.slice(0, options.maxFindings) : filteredFindings;
   const capped = selected.slice(0, MAX_FINDINGS);

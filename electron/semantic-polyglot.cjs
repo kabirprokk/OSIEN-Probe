@@ -257,8 +257,74 @@ const GO_PATH_SINK_RE = /\b(?:os\.(?:ReadFile|Open|WriteFile|Remove)|ioutil\.Rea
 function analyzeGoTaint(raw, rel) {
   const findings = [];
   const lines = raw.split(/\r?\n/);
-  const tainted = new Set();
+  const ag = getAstGrep();
 
+  if (ag) {
+    try {
+      const root = ag.parse('go', raw).root();
+      const fns = [
+        ...root.findAll({ rule: { kind: 'function_declaration' } }),
+        ...root.findAll({ rule: { kind: 'method_declaration' } }),
+      ];
+      for (const fn of fns) {
+        const tainted = new Set();
+        const assigns = [
+          ...fn.findAll({ rule: { kind: 'short_var_declaration' } }),
+          ...fn.findAll({ rule: { kind: 'assignment_statement' } }),
+        ].sort((a, b) => a.range().start.index - b.range().start.index);
+        for (const st of assigns) {
+          const text = st.text();
+          const sep = text.includes(':=') ? ':=' : '=';
+          const idx = text.indexOf(sep);
+          if (idx < 0) continue;
+          const lhs = text.slice(0, idx).trim().split(/[\s,]+/)[0];
+          const rhs = text.slice(idx + sep.length);
+          if (!/^[A-Za-z_]\w*$/.test(lhs)) continue;
+          if (GO_SANITIZER_RE.test(rhs)) { tainted.delete(lhs); continue; }
+          if (GO_SOURCE_RE.test(rhs) || [...tainted].some((v) => new RegExp(`\\b${v}\\b`).test(rhs))) tainted.add(lhs);
+          else tainted.delete(lhs);
+        }
+        const calls = fn.findAll({ rule: { kind: 'call_expression' } });
+        for (const call of calls) {
+          const cText = call.text();
+          const line = call.range().start.line + 1;
+          if (GO_SINK_RE.test(cText) && !GO_SANITIZER_RE.test(cText)) {
+            const usesTainted = GO_SOURCE_RE.test(cText) || [...tainted].some((v) => new RegExp(`\\b${v}\\b`).test(cText));
+            const isSql = /\bdb\.(?:Query|Exec|QueryRow)\s*\(/.test(cText);
+            const hasConcatOrFmt = /[+]|fmt\.Sprintf\s*\(/.test(cText);
+            if (usesTainted && (!isSql || hasConcatOrFmt)) {
+              findings.push(buildFinding(
+                rel, line, 'go-taint-sink',
+                'HTTP request input flows into Go SQL/shell sink',
+                'high', 'CWE-89',
+                'Use parameterized SQL placeholders ($1 / ?) or pass explicit command arguments without sh -c.',
+                'AST taint analysis confirms HTTP input flows into SQL concatenation or shell command execution.',
+                lines[line - 1] || cText,
+              ));
+            }
+          }
+          if (GO_PATH_SINK_RE.test(cText) && !GO_SANITIZER_RE.test(cText)) {
+            const usesTainted = GO_SOURCE_RE.test(cText) || [...tainted].some((v) => new RegExp(`\\b${v}\\b`).test(cText));
+            if (usesTainted) {
+              findings.push(buildFinding(
+                rel, line, 'go-path-traversal',
+                'HTTP request input flows into Go filesystem read/write sink',
+                'high', 'CWE-22',
+                'Sanitize filenames with filepath.Base() and verify the resolved path stays inside an allowed base directory.',
+                'AST taint analysis confirms HTTP input flows into os.ReadFile/os.Open/os.Remove without filepath.Base.',
+                lines[line - 1] || cText,
+              ));
+            }
+          }
+        }
+      }
+      return findings;
+    } catch {
+      // Fall through to line analyzer
+    }
+  }
+
+  const tainted = new Set();
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (!trimmed || trimmed.startsWith('//')) continue;
@@ -307,6 +373,45 @@ function analyzeGoTaint(raw, rel) {
 function analyzeRustSemantic(raw, rel) {
   const findings = [];
   const lines = raw.split(/\r?\n/);
+  const ag = getAstGrep();
+
+  if (ag) {
+    try {
+      const root = ag.parse('rust', raw).root();
+      const calls = root.findAll({ rule: { kind: 'call_expression' } });
+      const seen = new Set();
+      for (const call of calls) {
+        const cText = call.text();
+        const line = call.range().start.line + 1;
+        if ((/sqlx::query\s*\(\s*&?format!\s*\(/.test(cText) || /\.execute\s*\(\s*&?format!\s*\(/.test(cText)) && !seen.has(`sql:${line}`)) {
+          seen.add(`sql:${line}`);
+          findings.push(buildFinding(
+            rel, line, 'rust-sql-format',
+            'Rust SQL query built with format!() interpolation',
+            'high', 'CWE-89',
+            'Use bound parameters (.bind(value)) with sqlx::query("SELECT ... WHERE id = $1") instead of format!().',
+            'AST analysis confirms dynamic format!() string is passed into SQL query execution.',
+            lines[line - 1] || cText,
+          ));
+        }
+        if (/Command::new\s*\(\s*"(?:sh|bash)"\s*\)\s*\.arg\s*\(\s*"-c"\s*\)\s*\.arg\s*\(\s*&?[A-Za-z_]\w*/.test(cText) && !seen.has(`cmd:${line}`)) {
+          seen.add(`cmd:${line}`);
+          findings.push(buildFinding(
+            rel, line, 'rust-cmd-shell-taint',
+            'Dynamic variable passed to sh -c via std::process::Command',
+            'high', 'CWE-78',
+            'Pass the executable and individual arguments via Command::new(bin).arg(arg) without a shell.',
+            'AST analysis confirms Command::new("sh").arg("-c").arg(var) enables shell injection.',
+            lines[line - 1] || cText,
+          ));
+        }
+      }
+      return findings;
+    } catch {
+      // Fall through to line analyzer
+    }
+  }
+
   for (let i = 0; i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (!trimmed || trimmed.startsWith('//')) continue;

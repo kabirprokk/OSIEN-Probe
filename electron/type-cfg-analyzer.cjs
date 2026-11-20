@@ -327,32 +327,70 @@ function buildCfgForBody(stmts) {
   return blocks;
 }
 
-function collectDerefsInStmt(stmt, out) {
-  function scan(node, parent) {
+function collectGuardedNamesInExpr(expr, outSet) {
+  if (!expr || typeof expr !== 'object') return;
+  if (expr.type === 'Identifier') { outSet.add(expr.name); return; }
+  if (expr.type === 'BinaryExpression' && (expr.operator === '!==' || expr.operator === '!=')) {
+    if (expr.left?.type === 'Identifier' && (expr.right?.type === 'NullLiteral' || (expr.right?.type === 'Identifier' && expr.right.name === 'undefined'))) {
+      outSet.add(expr.left.name);
+    }
+    return;
+  }
+  if (expr.type === 'LogicalExpression' && expr.operator === '&&') {
+    collectGuardedNamesInExpr(expr.left, outSet);
+    collectGuardedNamesInExpr(expr.right, outSet);
+  }
+}
+
+function collectDerefsInStmt(stmt, out, guarded = new Set()) {
+  function scan(node, parent, activeGuarded) {
     if (!node || typeof node !== 'object') return;
     if (node !== stmt && (node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression' || node.type === 'ArrowFunctionExpression')) {
       return;
     }
+    if (node.type === 'LogicalExpression' && node.operator === '&&') {
+      scan(node.left, node, activeGuarded);
+      const nextGuarded = new Set(activeGuarded);
+      collectGuardedNamesInExpr(node.left, nextGuarded);
+      scan(node.right, node, nextGuarded);
+      return;
+    }
+    if (node.type === 'ConditionalExpression') {
+      scan(node.test, node, activeGuarded);
+      const nextGuarded = new Set(activeGuarded);
+      collectGuardedNamesInExpr(node.test, nextGuarded);
+      scan(node.consequent, node, nextGuarded);
+      scan(node.alternate, node, activeGuarded);
+      return;
+    }
     if (node.type === 'MemberExpression' && !node.optional && node.object?.type === 'Identifier') {
-      out.push({ name: node.object.name, line: node.loc?.start?.line || stmt.loc?.start?.line || 1, node });
+      if (!activeGuarded.has(node.object.name)) {
+        out.push({ name: node.object.name, line: node.loc?.start?.line || stmt.loc?.start?.line || 1, node });
+      }
     }
     for (const key of Object.keys(node)) {
       if (key === 'loc' || key === 'start' || key === 'end' || key === 'extra') continue;
       const val = node[key];
       if (Array.isArray(val)) {
         for (const item of val) {
-          if (item && typeof item.type === 'string') scan(item, node);
+          if (item && typeof item.type === 'string') scan(item, node, activeGuarded);
         }
       } else if (val && typeof val.type === 'string') {
-        scan(val, node);
+        scan(val, node, activeGuarded);
       }
     }
     void parent;
   }
-  scan(stmt, null);
+  scan(stmt, null, guarded);
 }
 
 function transferStmt(stmt, env, nullRisks) {
+  if (stmt.type === 'ForOfStatement' || stmt.type === 'ForInStatement') {
+    const loopVar = stmt.left?.type === 'VariableDeclaration'
+      ? stmt.left.declarations?.[0]?.id?.name
+      : stmt.left?.type === 'Identifier' ? stmt.left.name : null;
+    if (loopVar) env.delete(loopVar);
+  }
   // Check derefs BEFORE statement mutations if stmt is not an assignment to the variable itself
   const derefs = [];
   collectDerefsInStmt(stmt, derefs);

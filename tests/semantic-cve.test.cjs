@@ -518,3 +518,49 @@ test('Live Website Fix Generator (generateWebRemediation) and SRI / HttpOnly che
     await new Promise((resolve) => srv.close(resolve));
   }
 });
+
+test('Minified JS skip, CFG loop-shadowing/short-circuit guard, and multi-line Go/Rust AST taint', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-cycle3-'));
+  // 1. Minified vendor bundle (>4000 bytes, single long line) should be skipped cleanly
+  const minified = 'var a=1;' + 'x=eval("1");'.repeat(400);
+  await fs.writeFile(path.join(dir, 'vendor-bundle.js'), minified);
+
+  // 2. CFG loop-shadowing + && short-circuit guard should NOT false-positive
+  await fs.writeFile(path.join(dir, 'cfg-safe.ts'), [
+    'export function render(items: { offset: { x: number } }[], maybeItem?: { name: string } | null) {',
+    '  let item: { offset: { x: number } } | null = null;',
+    '  for (const item of items) {',
+    '    void item.offset.x;',
+    '  }',
+    '  if (maybeItem && maybeItem.name.length > 0) {',
+    '    return maybeItem.name;',
+    '  }',
+    '  void item;',
+    '  return "";',
+    '}',
+  ].join('\n'));
+
+  // 3. Multi-line Go & Rust AST taint should be caught
+  await fs.writeFile(path.join(dir, 'multi.go'), [
+    'package main',
+    'func handler(r *http.Request, db *sql.DB) {',
+    '  id := r.URL.Query().Get("id")',
+    '  db.Query(',
+    '    "SELECT * FROM users WHERE id = " + id,',
+    '  )',
+    '}',
+  ].join('\n'));
+  await fs.writeFile(path.join(dir, 'multi.rs'), [
+    'pub fn run(user_cmd: &str) {',
+    '  Command::new("sh")',
+    '    .arg("-c")',
+    '    .arg(user_cmd);',
+    '}',
+  ].join('\n'));
+
+  const report = await scanProjectRoot(dir, 'Software', { bugsOnly: true });
+  assert.ok(!report.findings.some((f) => f.file === 'vendor-bundle.js'), 'skips minified JS bundles');
+  assert.ok(!report.findings.some((f) => f.file === 'cfg-safe.ts' && f.ruleId === 'cfg-null-deref'), 'ignores loop-shadowed vars and && guards in CFG');
+  assert.ok(report.findings.some((f) => f.ruleId === 'go-taint-sink'), 'catches multi-line Go AST taint');
+  assert.ok(report.findings.some((f) => f.ruleId === 'rust-cmd-shell-taint' || f.ruleId === 'polyglot-rust-shell'), 'catches multi-line Rust AST shell taint');
+});
