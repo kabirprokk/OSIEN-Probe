@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { type KeyboardEvent, useEffect, useRef } from 'react';
 
 /**
  * OSIEN Signature Sine-Wave Scroll Bar — Interactive (Click & Drag to Scrub Page Scroll)
@@ -55,6 +55,7 @@ export function OsienWaveScroll() {
     const onScroll = () => {
       const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
       targetProgress = Math.max(0, Math.min(1, window.scrollY / maxScroll));
+      canvas.setAttribute('aria-valuenow', String(Math.round(targetProgress * 100)));
       const dy = window.scrollY - lastScrollY;
       lastScrollY = window.scrollY;
       velocity = Math.max(-40, Math.min(40, velocity + dy * 0.14));
@@ -193,13 +194,36 @@ export function OsienWaveScroll() {
     };
   }, []);
 
+  const handleKeyDown = (e: KeyboardEvent<HTMLCanvasElement>) => {
+    const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    const step = window.innerHeight * 0.4;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      window.scrollBy({ top: step, behavior: 'smooth' });
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      window.scrollBy({ top: -step, behavior: 'smooth' });
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      window.scrollTo({ top: maxScroll, behavior: 'smooth' });
+    }
+  };
+
   return (
     <canvas
       ref={canvasRef}
       className="osien-wave-scroll"
       role="slider"
-      aria-label="Click or drag along the OSIEN wave to scroll the page"
+      tabIndex={0}
+      aria-label="Page scroll progress"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={0}
       title="Click or drag to scroll"
+      onKeyDown={handleKeyDown}
     />
   );
 }

@@ -116,7 +116,7 @@ export function LaunchLoader({ realProgress, sceneReady, onComplete }: LaunchLoa
       }
 
       const arrivalElapsed = arrivedAt !== null ? (now - arrivedAt) / 1000 : 0;
-      if (arrivedAt !== null && arrivalElapsed >= 0.9 && !exitStarted) {
+      if (arrivedAt !== null && arrivalElapsed >= 0.65 && !exitStarted) {
         exitStarted = true;
         setVisible(false);
         window.setTimeout(() => onCompleteRef.current(), 420);

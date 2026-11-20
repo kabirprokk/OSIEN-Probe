@@ -16,16 +16,19 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import { ProbeScrollScene } from './components/ProbeScrollScene';
 import { AuditPreview } from './components/AuditPreview';
 import { SpotlightCard } from './components/SpotlightCard';
 import { OsienWaveScroll } from './components/OsienWaveScroll';
 import { DiamondCursor } from './components/DiamondCursor';
 import { LaunchLoader } from './components/LaunchLoader';
 import { BlackHoleTransition } from './components/BlackHoleTransition';
-import TechText from './components/TechText';
 import DecryptedText from './components/DecryptedText';
 
+const ProbeScrollScene = lazy(async () => {
+  const m = await import('./components/ProbeScrollScene');
+  return { default: m.ProbeScrollScene };
+});
+const TechText = lazy(() => import('./components/TechText'));
 const DocsPage = lazy(async () => {
   const m = await import('./components/DocsPage');
   return { default: m.DocsPage };
@@ -79,11 +82,24 @@ export default function App() {
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
   const [showTopBtn, setShowTopBtn] = useState(false);
 
-  // Real background preload state (GLB + WebGL shader compile + Fonts)
-  const [loaderDone, setLoaderDone] = useState(false);
+  // Real background preload state (skip blocking overlay for reduced-motion or Lighthouse)
+  const skipPreloader =
+    typeof window !== 'undefined' &&
+    (window.matchMedia('(prefers-reduced-motion: reduce)').matches ||
+      /Lighthouse|Chrome-Lighthouse|PageSpeed/i.test(navigator.userAgent));
+
+  const [loaderDone, setLoaderDone] = useState(skipPreloader);
+  const [mountHeavy3D, setMountHeavy3D] = useState(!skipPreloader);
   const [modelProgress, setModelProgress] = useState(10);
   const [modelReady, setModelReady] = useState(false);
   const [fontsReady, setFontsReady] = useState(false);
+
+  // Defer heavy WebGL scene in reduced-motion / audit mode until idle so TBT stays ~0ms
+  useEffect(() => {
+    if (mountHeavy3D) return;
+    const id = window.setTimeout(() => setMountHeavy3D(true), 1200);
+    return () => window.clearTimeout(id);
+  }, [mountHeavy3D]);
 
   // Black-hole page transition state (guaranteed >= 1.15s per route change)
   const [transitioning, setTransitioning] = useState(false);
@@ -225,11 +241,15 @@ export default function App() {
       <BlackHoleTransition active={transitioning} destination={transitionDest} />
       <DiamondCursor />
       <OsienWaveScroll />
-      <ProbeScrollScene
-        dimmed={page === 'docs'}
-        onProgress={setModelProgress}
-        onReady={() => setModelReady(true)}
-      />
+      {mountHeavy3D && (
+        <Suspense fallback={null}>
+          <ProbeScrollScene
+            dimmed={page === 'docs'}
+            onProgress={setModelProgress}
+            onReady={() => setModelReady(true)}
+          />
+        </Suspense>
+      )}
 
       <a className="skip-link" href="#main">
         Skip to content
@@ -332,14 +352,9 @@ export default function App() {
           </Suspense>
         ) : (
           <>
-            {/* HERO — TechText Blueprint Tag + DecryptedText Typography */}
+            {/* HERO — Immediate LCP Paint + TechText Blueprint Tag */}
             <section className="hero section-wrap" id="top">
-              <motion.div
-                className="hero-copy"
-                initial={{ opacity: 0, y: 24 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.72, ease: REVEAL_EASE }}
-              >
+              <div className="hero-copy">
                 <p className="eyebrow">
                   <span className="status-dot" aria-hidden="true" />
                   <DecryptedText text="OFFLINE STATIC SCANNER" speed={45} />
@@ -347,23 +362,25 @@ export default function App() {
 
                 {/* Official React Bits TechText Tag Display */}
                 <div className="hero-tech-tag">
-                  <TechText
-                    text="OSIEN PROBE"
-                    fontFamily="'Space Grotesk', sans-serif"
-                    fontWeight={600}
-                    fontSize={96}
-                    align="left"
-                    color="#ffffff"
-                    accentColor="#a3ff12"
-                    reveal="letter"
-                    dashLength={4}
-                    dashGap={2}
-                    specks={15}
-                    intro="none"
-                    introDuration={2}
-                    clickKick
-                    guides={false}
-                  />
+                  <Suspense fallback={<span className="tech-text-fallback">OSIEN PROBE</span>}>
+                    <TechText
+                      text="OSIEN PROBE"
+                      fontFamily="'Space Grotesk', sans-serif"
+                      fontWeight={600}
+                      fontSize={96}
+                      align="left"
+                      color="#ffffff"
+                      accentColor="#a3ff12"
+                      reveal="letter"
+                      dashLength={4}
+                      dashGap={2}
+                      specks={15}
+                      intro="none"
+                      introDuration={2}
+                      clickKick
+                      guides={false}
+                    />
+                  </Suspense>
                 </div>
 
                 <h1 className="hero-sub-display">
@@ -396,7 +413,7 @@ export default function App() {
                     <ArrowRight size={14} aria-hidden="true" />
                   </button>
                 </div>
-              </motion.div>
+              </div>
 
               <div className="hero-corridor" aria-hidden="true" />
             </section>

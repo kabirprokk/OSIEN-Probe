@@ -21,11 +21,11 @@
   --danger: #ffffff;
   --danger-soft: rgba(255, 255, 255, 0.16);
 
-  /* 30% High-Contrast White Typography & Structure */
+  /* 30% High-Contrast White Typography & Structure (WCAG AAA >= 6.8:1) */
   --ink: #ffffff;
-  --ink-dim: #d8d8d8;
-  --muted: #9a9a9a;
-  --quiet: #666666;
+  --ink-dim: #e0e0e0;
+  --muted: #b3b3b3;
+  --quiet: #949494;
 
   --display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
   --sans: 'Inter', system-ui, sans-serif;
@@ -2238,4 +2238,15 @@ main,
   to {
     transform: rotate(360deg);
   }
+}
+
+.tech-text-fallback {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: clamp(40px, 6vw, 88px);
+  letter-spacing: -0.04em;
+  color: var(--ink);
 }
