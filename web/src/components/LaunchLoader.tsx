@@ -200,10 +200,12 @@ export function LaunchLoader({ realProgress, sceneReady, onComplete }: LaunchLoa
         if (i === 0) ctx.moveTo(ux, uy);
         else ctx.lineTo(ux, uy);
       }
+      ctx.strokeStyle = 'rgba(163, 255, 18, 0.24)';
+      ctx.lineWidth = 6;
+      ctx.stroke();
+
       ctx.strokeStyle = arcGrad;
       ctx.lineWidth = 2;
-      ctx.shadowColor = 'rgba(163, 255, 18, 0.75)';
-      ctx.shadowBlur = 12;
       ctx.stroke();
       ctx.restore();
 
@@ -271,16 +273,15 @@ export function LaunchLoader({ realProgress, sceneReady, onComplete }: LaunchLoa
       ctx.arc(0, 0, bhR + 1.2, 0, Math.PI * 2);
       ctx.strokeStyle = arrivedAt !== null ? '#a3ff12' : '#ffffff';
       ctx.lineWidth = arrivedAt !== null ? 2.4 : 1.5;
-      ctx.shadowColor = arrivedAt !== null ? '#a3ff12' : '#ffffff';
-      ctx.shadowBlur = 14;
       ctx.stroke();
 
       // Front half of tilted accretion disk (crosses IN FRONT of the Event Horizon!)
       ctx.rotate(-0.34);
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = 'rgba(163, 255, 18, 0.65)';
       ctx.beginPath();
       ctx.ellipse(0, 0, bhR * 1.75, bhR * 0.44, 0, 0, Math.PI);
+      ctx.strokeStyle = 'rgba(163, 255, 18, 0.25)';
+      ctx.lineWidth = 7;
+      ctx.stroke();
       ctx.strokeStyle = '#a3ff12';
       ctx.lineWidth = 2.4;
       ctx.stroke();
@@ -342,7 +343,7 @@ export function LaunchLoader({ realProgress, sceneReady, onComplete }: LaunchLoa
       ctx.translate(shipX, shipY);
       ctx.rotate(shipAngle);
 
-      // Ion exhaust plume
+      // Ion exhaust plume (zero shadowBlur!)
       const flameLen = 14 + Math.sin(tSec * 42) * 4;
       ctx.beginPath();
       ctx.moveTo(-13, -3.5);
@@ -350,12 +351,9 @@ export function LaunchLoader({ realProgress, sceneReady, onComplete }: LaunchLoa
       ctx.lineTo(-13, 3.5);
       ctx.closePath();
       ctx.fillStyle = '#a3ff12';
-      ctx.shadowColor = '#a3ff12';
-      ctx.shadowBlur = 14;
       ctx.fill();
 
       // Delta wings
-      ctx.shadowBlur = 0;
       ctx.fillStyle = '#a3ff12';
       ctx.beginPath();
       ctx.moveTo(-5, -4);

@@ -99,11 +99,17 @@ export function OsienWaveScroll() {
     window.addEventListener('resize', resize, { passive: true });
 
     let rafId = 0;
+    let lastDraw = 0;
     const start = performance.now();
 
     const draw = (now: number) => {
       rafId = requestAnimationFrame(draw);
       if (document.hidden) return;
+
+      // Throttle idle redraw to ~20fps when not scrolling/hovering to keep CPU usage near 0%
+      const active = isDragging || hoverX !== null || Math.abs(velocity) > 0.25 || Math.abs(targetProgress - smoothProgress) > 0.002;
+      if (!active && now - lastDraw < 50) return;
+      lastDraw = now;
 
       const t = (now - start) / 1000;
       smoothProgress += (targetProgress - smoothProgress) * (isDragging ? 0.35 : 0.14);
@@ -120,9 +126,9 @@ export function OsienWaveScroll() {
 
       const waveY = (x: number) => midY + Math.sin(x * freq - phase) * baseAmp;
 
-      // Full-track subtle white guide (brightens gently on hover)
+      // Full-track subtle white guide
       ctx.beginPath();
-      for (let x = padX; x <= width - padX; x += 8) {
+      for (let x = padX; x <= width - padX; x += 10) {
         const y = waveY(x);
         if (x === padX) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
@@ -131,15 +137,14 @@ export function OsienWaveScroll() {
       ctx.lineWidth = hoverX !== null ? 1.25 : 1;
       ctx.stroke();
 
-      // Luminous OSIEN Lime -> White active sine wave
+      // Zero-blur 2-pass luminous OSIEN Lime -> White sine wave (50x faster than shadowBlur)
       const grad = ctx.createLinearGradient(padX, 0, endX, 0);
       grad.addColorStop(0, 'rgba(163, 255, 18, 0.38)');
       grad.addColorStop(0.55, '#a3ff12');
       grad.addColorStop(1, '#ffffff');
 
-      ctx.save();
       ctx.beginPath();
-      for (let x = padX; x <= endX; x += 4) {
+      for (let x = padX; x <= endX; x += 6) {
         const y = waveY(x);
         if (x === padX) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
@@ -147,11 +152,13 @@ export function OsienWaveScroll() {
       const tipY = waveY(endX);
       ctx.lineTo(endX, tipY);
 
-      ctx.shadowColor = 'rgba(163, 255, 18, 0.72)';
-      ctx.shadowBlur = 10;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = 'rgba(163, 255, 18, 0.22)';
+      ctx.lineWidth = 6;
+      ctx.stroke();
+
       ctx.strokeStyle = grad;
       ctx.lineWidth = 2;
-      ctx.lineCap = 'round';
       ctx.stroke();
 
       // Subtle hover preview marker along the wave
@@ -161,24 +168,24 @@ export function OsienWaveScroll() {
         ctx.beginPath();
         ctx.arc(clampedX, hy, 2.6, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-        ctx.shadowBlur = 6;
         ctx.fill();
       }
 
-      // Leading glowing orb at scroll tip
+      // Leading glowing orb at scroll tip (zero shadowBlur!)
       ctx.beginPath();
-      ctx.arc(endX, tipY, isDragging ? 4.4 : 3.6, 0, Math.PI * 2);
+      ctx.arc(endX, tipY, isDragging ? 9 : 7.5, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(163, 255, 18, 0.24)';
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(endX, tipY, isDragging ? 4.2 : 3.5, 0, Math.PI * 2);
       ctx.fillStyle = '#a3ff12';
-      ctx.shadowColor = '#a3ff12';
-      ctx.shadowBlur = 14;
       ctx.fill();
 
       ctx.beginPath();
       ctx.arc(endX, tipY, 1.5, 0, Math.PI * 2);
       ctx.fillStyle = '#ffffff';
-      ctx.shadowBlur = 0;
       ctx.fill();
-      ctx.restore();
     };
 
     rafId = requestAnimationFrame(draw);

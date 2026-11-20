@@ -109,6 +109,8 @@ export function DocsPage({ onBack }: DocsPageProps) {
                 </span>
               </Tabs.Trigger>
             </Tabs.List>
+            <Tabs.Content value="human" />
+            <Tabs.Content value="ai" />
           </Tabs.Root>
 
           <button

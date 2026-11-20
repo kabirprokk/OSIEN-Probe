@@ -234,108 +234,115 @@ export function AuditPreview() {
         </Tabs.List>
       </div>
 
-      <div className="audit-metrics audit-metrics-3">
-        <div className="audit-metric">
-          <span>SCORE</span>
-          <strong className="metric-score">
-            {score}
-            <small>/100</small>
-          </strong>
+      <Tabs.Content value={category} className="audit-tabpanel">
+        <div className="audit-metrics audit-metrics-3">
+          <div className="audit-metric">
+            <span>SCORE</span>
+            <strong className="metric-score">
+              {score}
+              <small>/100</small>
+            </strong>
+          </div>
+          <div className="audit-metric">
+            <span>FILES</span>
+            <strong>{profile.files}</strong>
+          </div>
+          <div className="audit-metric">
+            <span>TIME</span>
+            <strong>{profile.ms}ms</strong>
+          </div>
         </div>
-        <div className="audit-metric">
-          <span>FILES</span>
-          <strong>{profile.files}</strong>
-        </div>
-        <div className="audit-metric">
-          <span>TIME</span>
-          <strong>{profile.ms}ms</strong>
-        </div>
-      </div>
 
-      <div className="audit-body">
-        <div className="audit-list" role="group" aria-label="Sample scan findings">
-          {profile.findings.map((finding) => {
-            const isSelected = finding.id === selectedFinding.id;
-            return (
-              <button
-                key={finding.id}
-                type="button"
-                aria-pressed={isSelected}
-                className={`finding-row ${isSelected ? 'is-selected' : ''}`}
-                onClick={() => setSelectedId(finding.id)}
+        <div className="audit-body">
+          <div className="audit-list" role="group" aria-label="Sample scan findings">
+            {profile.findings.map((finding) => {
+              const isSelected = finding.id === selectedFinding.id;
+              return (
+                <button
+                  key={finding.id}
+                  type="button"
+                  aria-pressed={isSelected}
+                  className={`finding-row ${isSelected ? 'is-selected' : ''}`}
+                  onClick={() => setSelectedId(finding.id)}
+                >
+                  <div className="finding-row-top">
+                    <span className={`sev-pill sev-${finding.severity}`}>
+                      {finding.severity.toUpperCase()}
+                    </span>
+                    <span className="finding-cwe">{finding.cwe}</span>
+                    <span className="finding-loc">
+                      {finding.file}:{finding.line}
+                    </span>
+                  </div>
+                  <p className="finding-title">
+                    <DecryptedText text={finding.title} animateOn="hover" speed={30} />
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="audit-inspector">
+            <AnimatePresence mode="wait">
+              <motion.div
+                key={selectedFinding.id}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                className="inspector-inner"
               >
-                <div className="finding-row-top">
-                  <span className={`sev-pill sev-${finding.severity}`}>
-                    {finding.severity.toUpperCase()}
-                  </span>
-                  <span className="finding-cwe">{finding.cwe}</span>
-                  <span className="finding-loc">
-                    {finding.file}:{finding.line}
+                <div className="inspector-head">
+                  <div className="inspector-title">
+                    <ShieldAlert size={14} aria-hidden="true" />
+                    <span>{selectedFinding.ruleId}</span>
+                  </div>
+                  <span className={`ai-verdict verdict-${selectedFinding.aiVerdict}`}>
+                    <Cpu size={11} aria-hidden="true" />
+                    <CheckCircle2 size={11} aria-hidden="true" />
+                    {selectedFinding.aiVerdict}
                   </span>
                 </div>
-                <p className="finding-title">
-                  <DecryptedText text={finding.title} animateOn="hover" speed={30} />
-                </p>
-              </button>
-            );
-          })}
+
+                <div className="inspector-code">
+                  <div className="inspector-code-meta">
+                    <FileCode2 size={12} aria-hidden="true" />
+                    <span>
+                      {selectedFinding.file}:{selectedFinding.line}
+                    </span>
+                  </div>
+                  <pre>
+                    <code>
+                      <span className="line-num">{selectedFinding.line}</span>
+                      {selectedFinding.excerpt}
+                    </code>
+                  </pre>
+                </div>
+
+                <div className="inspector-meta-grid">
+                  <div className="inspector-block">
+                    <span className="inspector-label">TRACE</span>
+                    <p className="inspector-mono">
+                      <DecryptedText text={selectedFinding.trace} speed={30} />
+                    </p>
+                  </div>
+                  <div className="inspector-block">
+                    <span className="inspector-label">FIX</span>
+                    <p>
+                      <DecryptedText text={selectedFinding.fix} speed={30} />
+                    </p>
+                  </div>
+                </div>
+              </motion.div>
+            </AnimatePresence>
+          </div>
         </div>
-
-        <div className="audit-inspector">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={selectedFinding.id}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-              className="inspector-inner"
-            >
-              <div className="inspector-head">
-                <div className="inspector-title">
-                  <ShieldAlert size={14} aria-hidden="true" />
-                  <span>{selectedFinding.ruleId}</span>
-                </div>
-                <span className={`ai-verdict verdict-${selectedFinding.aiVerdict}`}>
-                  <Cpu size={11} aria-hidden="true" />
-                  <CheckCircle2 size={11} aria-hidden="true" />
-                  {selectedFinding.aiVerdict}
-                </span>
-              </div>
-
-              <div className="inspector-code">
-                <div className="inspector-code-meta">
-                  <FileCode2 size={12} aria-hidden="true" />
-                  <span>
-                    {selectedFinding.file}:{selectedFinding.line}
-                  </span>
-                </div>
-                <pre>
-                  <code>
-                    <span className="line-num">{selectedFinding.line}</span>
-                    {selectedFinding.excerpt}
-                  </code>
-                </pre>
-              </div>
-
-              <div className="inspector-meta-grid">
-                <div className="inspector-block">
-                  <span className="inspector-label">TRACE</span>
-                  <p className="inspector-mono">
-                    <DecryptedText text={selectedFinding.trace} speed={30} />
-                  </p>
-                </div>
-                <div className="inspector-block">
-                  <span className="inspector-label">FIX</span>
-                  <p>
-                    <DecryptedText text={selectedFinding.fix} speed={30} />
-                  </p>
-                </div>
-              </div>
-            </motion.div>
-          </AnimatePresence>
-        </div>
-      </div>
+      </Tabs.Content>
+      {(Object.keys(PROFILES) as CategoryKey[])
+        .filter((key) => key !== category)
+        .map((key) => (
+          <Tabs.Content key={key} value={key} />
+        ))}
     </Tabs.Root>
   );
 }
