@@ -89,7 +89,14 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "OSIEN Probe"
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "uninstallDisplayName": "OSIEN Probe",
+      "shortcutName": "OSIEN Probe",
+      "include": "build/installer.nsh"
     },
     "mac": {
       "icon": "build/icon.png",
