@@ -1,22 +1,25 @@
-# OSIEN Probe
+# OSIEN Probe (v1.0.5)
 
-> Offline static source analysis, 11-language tree-sitter AST bug finder, same-file taint tracker, secret scanner, and zero-dependency stdio MCP server by OSIEN.
+> Offline static source analysis (1,142+ ultra rules), 11-language tree-sitter AST call graphs, deep Live Website URL auditor with auto-fix config generator, secret scanner, and zero-dependency stdio MCP server by OSIEN.
 
 ## Links
 - [OSIEN Probe Homepage](https://osienprobe.vercel.app/): Interactive 3D showcase, live scan preview, and quickstart.
 - [OSIEN Probe Documentation](https://osienprobe.vercel.app/#docs): Visual architecture diagrams for humans and MCP/CLI specs for AI agents.
-- [OSIEN Probe GitHub Repository](https://github.com/kabirprokk/OSIEN-Probe): Source code, desktop app, CLI, and MCP server (MIT license).
+- [OSIEN Probe GitHub Repository](https://github.com/kabirprokk/OSIEN-Probe): Source code, native Windows/macOS/Linux desktop app, CLI, and MCP server (MIT license).
 - [OSIEN Parent Organization](https://osien.is-a.dev/): The broader OSIEN software and developer tooling ecosystem.
 
-## Core Capabilities
+## Core Capabilities (v1.0.5)
 - Zero code execution: Static analysis only; no project code is executed during a scan.
-- 11-language AST: Babel for JS/TS plus 11 `@ast-grep` tree-sitter grammars (Python, Go, Rust, Java, Kotlin, C/C++, C#, Ruby, PHP, Swift, Bash).
-- Same-file taint tracking: Tracks input-to-sink flows and recognizes sanitizers (`DOMPurify.sanitize`, `encodeURIComponent`, `path.basename`).
+- 1,142+ rules & 11-language AST call graphs: Babel for JS/TS plus 11 `@ast-grep` tree-sitter grammars (Python, Go, Rust, Java, PHP, Ruby, Kotlin, C/C++, Swift, C#, Bash) with CFG compound guard narrowing.
+- Deep Live Website URL Auditor: Multi-page same-origin crawl (`--crawl <n>`), HTTPS TLS inspection, CORS reflection probe (`--probe-cors`), exposed `/.git/HEAD` & `/.env` check (`--probe-exposed`), and Live Web Fix Generator (`--fix nginx|apache|express|nextjs|vercel|cloudflare|all`).
+- Same-file & cross-file taint tracking: Tracks input-to-sink flows and recognizes sanitizers (`DOMPurify.sanitize`, `encodeURIComponent`, `path.basename`).
 - Entropy secret scanning: Flags AWS, GitHub PAT, Stripe, OpenAI, Anthropic, Slack, GCP, and private keys.
-- Local Ollama AI triage: Optional snippet-only verification using local `qwen3.5:0.8b` with fast-fail circuit breaker.
+- Multi-provider AI verification: Local Ollama (`qwen3.5:0.8b`), Claude, OpenCode, and Pi providers with fast-fail circuit breaker.
+- Native Desktop App: Single-instance lock, drag-and-drop folders, deep Live URL audit with Save Config, and custom Windows NSIS installer.
 - Reports & CI gating: SARIF 2.1.0, Markdown, JSON, and `--fail-on <severity>`.
 
 ## CLI & MCP Usage
 - Interactive TUI: `probe`
-- Static scan: `probe scan <path> --kind "Website" --sarif --fail-on high`
+- Static project scan: `probe scan <path> --kind "Website" --sarif --fail-on high`
+- Live URL audit + fix config: `probe scan https://your-site.com --crawl 5 --probe-cors --probe-exposed --fix vercel`
 - MCP stdio server: `node bin/osien-probe-mcp.cjs` (tools: `scan_project`, `inspect_finding_context`, `verify_finding_with_ai`, `list_rules`)

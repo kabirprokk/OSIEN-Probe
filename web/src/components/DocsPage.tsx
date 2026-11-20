@@ -8,10 +8,10 @@ interface DocsPageProps {
   onBack: () => void;
 }
 
-const AI_LLMS_TXT = `# OSIEN Probe (v1.0.1) — AI Agent Reference
+const AI_LLMS_TXT = `# OSIEN Probe (v1.0.5) — AI Agent Reference
 
 ## What it is
-Offline static source code scanner, 11-language tree-sitter AST analyzer, secret detector, and zero-dependency stdio MCP server. Executes ZERO project code during scans.
+Offline static source code scanner (1,142+ ultra rules), 11-language tree-sitter AST call graphs & CFG compound guard analyzer, deep Live Website URL auditor with auto-fix config generator, secret detector, and zero-dependency stdio MCP server. Executes ZERO project code during scans.
 
 ## Install
 git clone https://github.com/kabirprokk/OSIEN-Probe.git
@@ -19,15 +19,22 @@ cd OSIEN-Probe && npm install
 
 ## CLI Commands
 probe                                               # Interactive TUI
-probe scan <path> [options]                         # Static scan
-probe rules [--kind <category>]                     # List rules & CWEs
-probe ai-status                                     # Check local Ollama (qwen3.5:0.8b)
+probe scan <path|https://url> [options]             # Static project or Live URL scan
+probe rules [--kind <category>]                     # List 1,142+ rules & CWEs
+probe ai-status                                     # Check AI providers (Ollama, Claude, OpenCode, Pi)
 probe mcp                                           # Start stdio MCP server
 npm run audit -- <path> "<category>" --sarif        # Export SARIF 2.1.0
 
 ## CLI Flags
 --kind, -k <Website | Software | API / backend | Mobile app | Library | Data / ML>
 --bugs-only | --json | --sarif | --markdown | --out <file> | --fail-on <critical|high|medium|low|info>
+--fix [nginx|apache|express|nextjs|vercel|cloudflare|all]  # Generate live web security fix config
+--probe-exposed                                     # Check /.git/HEAD and /.env on live URLs
+--probe-cors                                        # Check arbitrary Origin CORS reflection
+--crawl <n>                                         # Crawl up to N same-origin linked HTML pages
+
+## AST Call Graphs & Languages
+JS/TS (Babel) + 11 tree-sitter grammars: Python, Go, Rust, Java, PHP, Ruby, Kotlin, C/C++, Swift, C#, Bash.
 
 ## MCP Server (stdio)
 Command: node bin/osien-probe-mcp.cjs
@@ -39,7 +46,7 @@ Tools:
 
 ## Score Formula & Limits
 Score = 100 * 100 / (100 + penalty); weights: critical=18, high=10, medium=4, low=1, info=0.
-Limits: Static heuristics (not proof). Skips node_modules, dist, build, .git, lockfiles, files > 1MB. Caps at 6,000 files or 1,000 findings.
+Limits: Static heuristics (not proof). Skips node_modules, dist, build, .git, minified JS/CSS, lockfiles, files > 1MB. Caps at 6,000 files or 1,000 findings.
 Suppressions: .deepcheckignore globs or inline deepcheck-disable-file / deepcheck-disable-line / deepcheck-disable-next-line.`;
 
 const MCP_JSON = `{
@@ -321,20 +328,20 @@ export function DocsPage({ onBack }: DocsPageProps) {
             <div className="docs-grid-3">
               <div className="docs-card">
                 <span className="feature-index">DESKTOP</span>
-                <h3>Visual App</h3>
-                <p>Open any folder or Git URL. Review findings and run tests only when you confirm.</p>
+                <h3>Visual App &amp; Save Config</h3>
+                <p>Drag-drop folders, Git URLs, or deep Live URL audits. Export fix configs &amp; install via native NSIS.</p>
                 <code>npm install &amp;&amp; npm run dev</code>
               </div>
               <div className="docs-card">
-                <span className="feature-index">CLI / CI</span>
-                <h3>Terminal &amp; Gates</h3>
-                <p>Fail CI builds on high findings or export SARIF 2.1.0 for GitHub Code Scanning.</p>
-                <code>probe scan . --sarif --fail-on high</code>
+                <span className="feature-index">LIVE URL &amp; CLI</span>
+                <h3>Crawl, Probe &amp; Auto-Fix</h3>
+                <p>Audit live HTTPS sites for TLS, CORS reflection, and exposed dotfiles, then generate server fix configs.</p>
+                <code>probe scan https://site.com --crawl 5 --fix vercel</code>
               </div>
               <div className="docs-card">
                 <span className="feature-index">SUPPRESSIONS</span>
                 <h3>Ignore Noise</h3>
-                <p>Use <code>.deepcheckignore</code> globs or inline comments on intentional patterns.</p>
+                <p>Skips minified JS/CSS automatically. Use <code>.deepcheckignore</code> globs or inline comments.</p>
                 <code>// deepcheck-disable-next-line</code>
               </div>
             </div>

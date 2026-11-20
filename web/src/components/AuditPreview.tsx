@@ -3,7 +3,7 @@ import * as Tabs from '@radix-ui/react-tabs';
 import { AnimatePresence, motion } from 'motion/react';
 import { ShieldAlert, FileCode2, Cpu, CheckCircle2 } from 'lucide-react';
 
-type CategoryKey = 'website' | 'api' | 'software';
+type CategoryKey = 'website' | 'live' | 'api' | 'software';
 
 interface Finding {
   id: string;
@@ -78,6 +78,53 @@ const PROFILES: Record<CategoryKey, ScanProfile> = {
         excerpt: 'window.location.assign(nextUrl || "/");',
         trace: 'req.query.next → location.assign',
         fix: 'Allow only single-slash relative paths.',
+        aiVerdict: 'likely_real',
+      },
+    ],
+  },
+  live: {
+    label: 'Live URL',
+    command: 'probe scan https://app.example.com --crawl 5 --probe-cors --probe-exposed --fix vercel',
+    files: 5,
+    ms: 612,
+    findings: [
+      {
+        id: 'l1',
+        ruleId: 'live-cors-reflection',
+        cwe: 'CWE-942',
+        severity: 'high',
+        title: 'CORS reflects arbitrary Origin with credentials',
+        file: 'https://app.example.com/api',
+        line: 1,
+        excerpt: 'Access-Control-Allow-Origin: https://evil.probe.test | Credentials: true',
+        trace: '--probe-cors → reflected untrusted Origin header',
+        fix: 'Restrict ACAO to an explicit allowlist (--fix vercel / nginx).',
+        aiVerdict: 'likely_real',
+      },
+      {
+        id: 'l2',
+        ruleId: 'live-exposed-env',
+        cwe: 'CWE-538',
+        severity: 'critical',
+        title: 'Exposed /.env file reachable over HTTPS',
+        file: 'https://app.example.com/.env',
+        line: 1,
+        excerpt: 'HTTP 200 OK — DATABASE_URL=postgres://... (redacted)',
+        trace: '--probe-exposed → /.env returned 200 with secret keys',
+        fix: 'Block dotfiles in server config & rotate exposed credentials.',
+        aiVerdict: 'likely_real',
+      },
+      {
+        id: 'l3',
+        ruleId: 'live-missing-csp-hsts',
+        cwe: 'CWE-693',
+        severity: 'medium',
+        title: 'Missing Content-Security-Policy & HSTS headers',
+        file: 'https://app.example.com/',
+        line: 1,
+        excerpt: 'Strict-Transport-Security: (absent) | CSP: (absent)',
+        trace: 'HTTPS TLS + header audit → 2 security headers missing',
+        fix: 'Apply generated headers via --fix vercel or Save Config in Desktop.',
         aiVerdict: 'likely_real',
       },
     ],

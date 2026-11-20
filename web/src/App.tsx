@@ -46,28 +46,27 @@ type QuickstartTab = 'cli' | 'desktop' | 'mcp';
 const QUICKSTART_COMMANDS: Record<QuickstartTab, { comment: string; command: string }[]> = {
   cli: [
     {
-      comment: '# Clone & install',
-      command:
-        'git clone https://github.com/kabirprokk/OSIEN-Probe.git && cd OSIEN-Probe && npm install',
+      comment: '# Scan a local project & gate CI',
+      command: 'probe scan ./project --kind "Website" --sarif --fail-on high',
     },
     {
-      comment: '# Scan & export SARIF',
-      command: 'npm run audit -- ./project "Website" --sarif --fail-on high',
+      comment: '# Deep live URL audit + generate Vercel/Nginx fix config',
+      command: 'probe scan https://your-site.com --crawl 5 --probe-cors --probe-exposed --fix vercel',
     },
   ],
   desktop: [
     {
-      comment: '# Launch desktop app',
+      comment: '# Launch desktop app (drag-drop folders, Git URLs, or Live URLs)',
       command: 'npm install && npm run dev',
     },
     {
-      comment: '# Verify rule & AST test suite',
-      command: 'npm test',
+      comment: '# Build native Windows NSIS / macOS DMG / Linux AppImage installer',
+      command: 'npm run dist:win',
     },
   ],
   mcp: [
     {
-      comment: '# Start stdio MCP server',
+      comment: '# Start zero-dependency stdio MCP server',
       command: 'probe mcp',
     },
     {
@@ -468,7 +467,8 @@ export default function App() {
                 </h1>
 
                 <p className="hero-intro">
-                  Local 11-language AST bug finder, secret scanner, and MCP server.
+                  1,142+ rules, 11-language AST call graphs, live URL auditor with auto-fix configs,
+                  and MCP server.
                 </p>
 
                 <div className="hero-actions">
@@ -553,12 +553,13 @@ export default function App() {
                     {mountHeavy3D ? (<Suspense fallback="11-language AST"><DecryptedText animateOn="inViewHover" text="11-language AST" speed={42} /></Suspense>) : '11-language AST'}
                   </h3>
                   <p>
-                    Syntax-aware checks across JS/TS, Python, Go, Rust, Java, C++, and Bash.
+                    1,142+ rules &amp; AST call graphs across JS/TS, Python, Go, Rust, Java, PHP,
+                    Ruby, Kotlin, C/C++, and Swift.
                   </p>
                   <div className="feature-tags">
-                    <span>Babel</span>
-                    <span>@ast-grep</span>
-                    <span>11 Grammars</span>
+                    <span>1,142+ Rules</span>
+                    <span>Call Graphs</span>
+                    <span>CFG Guards</span>
                   </div>
                 </SpotlightCard>
 
@@ -570,15 +571,16 @@ export default function App() {
                     </span>
                   </div>
                   <h3>
-                    {mountHeavy3D ? (<Suspense fallback="Taint & secrets"><DecryptedText animateOn="inViewHover" text="Taint & secrets" speed={42} /></Suspense>) : 'Taint & secrets'}
+                    {mountHeavy3D ? (<Suspense fallback="Live URL & taint"><DecryptedText animateOn="inViewHover" text="Live URL & taint" speed={42} /></Suspense>) : 'Live URL & taint'}
                   </h3>
                   <p>
-                    Tracks input-to-sink flows and flags leaked keys by entropy.
+                    Multi-page live crawl, TLS/CORS/exposed probes, and auto-generated fix configs
+                    for Vercel, Nginx, Next.js &amp; Cloudflare.
                   </p>
-                  <div className="taint-bar">
-                    <code>req.query</code>
-                    <span aria-hidden="true">→</span>
-                    <code className="taint-clean">DOMPurify</code>
+                  <div className="feature-code">
+                    <span>--crawl 5</span>
+                    <span>--probe-cors</span>
+                    <span>--fix vercel</span>
                   </div>
                 </SpotlightCard>
 
@@ -590,13 +592,14 @@ export default function App() {
                     </span>
                   </div>
                   <h3>
-                    {mountHeavy3D ? (<Suspense fallback="Local AI & SARIF"><DecryptedText animateOn="inViewHover" text="Local AI & SARIF" speed={42} /></Suspense>) : 'Local AI & SARIF'}
+                    {mountHeavy3D ? (<Suspense fallback="AI Triage & SARIF"><DecryptedText animateOn="inViewHover" text="AI Triage & SARIF" speed={42} /></Suspense>) : 'AI Triage & SARIF'}
                   </h3>
                   <p>
-                    Optional Ollama triage with fast-fail, plus SARIF 2.1.0 CI gating.
+                    Verify findings with local Ollama, Claude, OpenCode, or Pi — plus SARIF 2.1.0 CI
+                    gating.
                   </p>
                   <div className="feature-code">
-                    <span>qwen3.5:0.8b</span>
+                    <span>Ollama · Claude</span>
                     <span>--fail-on high</span>
                   </div>
                 </SpotlightCard>
@@ -641,7 +644,8 @@ export default function App() {
                           {mountHeavy3D ? (<Suspense fallback="Desktop App"><DecryptedText animateOn="inViewHover" text="Desktop App" speed={42} /></Suspense>) : 'Desktop App'}
                         </h3>
                         <p>
-                          Scan folders or Git URLs offline. Opt-in test runs.
+                          Drag-drop folders, Git URLs, or deep Live URL audits with Save Config &amp;
+                          native NSIS installer.
                         </p>
                       </div>
                     </li>
@@ -652,7 +656,7 @@ export default function App() {
                           {mountHeavy3D ? (<Suspense fallback="CLI & CI Gate"><DecryptedText animateOn="inViewHover" text="CLI & CI Gate" speed={42} /></Suspense>) : 'CLI & CI Gate'}
                         </h3>
                         <p>
-                          <code>probe scan --sarif --fail-on high</code>
+                          <code>probe scan https://site.com --crawl 5 --probe-cors --fix vercel</code>
                         </p>
                       </div>
                     </li>
@@ -688,7 +692,7 @@ export default function App() {
                 <div className="start-copy">
                   <span className="terminal-label">
                     <span className="status-dot" aria-hidden="true" />
-                    v1.0.1
+                    v1.0.5
                   </span>
 
                   <h2>
