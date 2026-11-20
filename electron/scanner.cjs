@@ -835,7 +835,7 @@ async function scanProjectRoot(root, kind, options = {}) {
         if (maxLen > 2000 || raw.length / Math.max(1, raw.split(/\r?\n/).length) > 350) return null;
       }
       if (lang === 'js' && jsFiles.length < 400) jsFiles.push({ rel, raw, extName });
-      if (['.py', '.go', '.rs', '.java', '.php'].includes(extName) && polyglotFiles.length < 400) polyglotFiles.push({ rel, raw, extName });
+      if (['.py', '.go', '.rs', '.java', '.php', '.rb', '.kt'].includes(extName) && polyglotFiles.length < 400) polyglotFiles.push({ rel, raw, extName });
       return { lang, ...scanFileContent(raw, rel, extName, lang, catalog, applicableByLang) };
     }));
 
@@ -907,7 +907,12 @@ async function scanProjectRoot(root, kind, options = {}) {
     'exp-js-express-trust-proxy-true',
   ]);
   const filteredFindings = options.bugsOnly
-    ? dedupeByCweLocation(uniqueFindings.filter((f) => !STYLE_HINT_RULES.has(f.ruleId) && !(TEST_FILE_PATH.test(f.file) && TEST_FIXTURE_NOISE.has(f.ruleId))))
+    ? dedupeByCweLocation(uniqueFindings.filter((f) => {
+      if (STYLE_HINT_RULES.has(f.ruleId)) return false;
+      if (TEST_FILE_PATH.test(f.file) && TEST_FIXTURE_NOISE.has(f.ruleId)) return false;
+      if ((f.ruleId === 'sql-drop' || f.ruleId === 'sql-drop-table-raw') && /\bDROP\s+(?:TABLE|INDEX|VIEW)\s+IF\s+EXISTS\b/i.test(f.excerpt || '')) return false;
+      return true;
+    }))
     : uniqueFindings;
   const selected = options.maxFindings ? filteredFindings.slice(0, options.maxFindings) : filteredFindings;
   const capped = selected.slice(0, MAX_FINDINGS);
@@ -1050,6 +1055,8 @@ const STYLE_HINT_RULES = new Set([
   'lib-no-entry', 'lib-no-files-allowlist',
   'polyglot-syntax-error', 'js-undeclared-var',
   'js-promise-no-catch', 'js-fixme', 'js-disabled-test', 'exp-logic-addeventlistener-anon',
+  'exp-sql-select-star', 'sql-select-star', 'css-outline-none',
+  'html-table-no-caption', 'html-img-no-dimensions', 'html-no-lang',
 ]);
 
 module.exports = {

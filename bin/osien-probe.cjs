@@ -59,6 +59,8 @@ Options:
   --fail-on <severity>    Exit 1 if any finding is at or above (critical|high|medium|low|info)
   --fix [platform]        Generate live website fix config (nginx|apache|express|nextjs|vercel|cloudflare|all)
   --probe-exposed         Check for exposed /.git/HEAD and /.env on live URLs
+  --probe-cors            Check if live URL reflects arbitrary Origin headers
+  --crawl <n>             Crawl up to N same-origin linked HTML pages on live URLs
   --quiet, -q             Only print summary counts (no per-finding lines)
   --help, -h              Show this help
   --version, -v           Print version`);
@@ -75,6 +77,8 @@ function parseArgs(argv) {
     failOn: null,
     fix: null,
     probeExposed: false,
+    probeCors: false,
+    crawlPages: 0,
     quiet: false,
     help: false,
     version: false,
@@ -86,6 +90,8 @@ function parseArgs(argv) {
     else if (arg === '--version' || arg === '-v') opts.version = true;
     else if (arg === '--bugs-only') opts.bugsOnly = true;
     else if (arg === '--probe-exposed') opts.probeExposed = true;
+    else if (arg === '--probe-cors') opts.probeCors = true;
+    else if (arg === '--crawl' && argv[i + 1]) opts.crawlPages = Math.max(0, Number(argv[++i]) || 0);
     else if (arg === '--fix' || arg === '--remediate') {
       const next = argv[i + 1];
       if (next && !next.startsWith('-') && ['nginx', 'apache', 'express', 'nextjs', 'vercel', 'cloudflare', 'all'].includes(next)) {
@@ -314,7 +320,12 @@ async function run() {
   const isLiveUrl = /^https?:\/\//i.test(opts.target);
   const root = isLiveUrl ? opts.target : path.resolve(opts.target);
   const result = isLiveUrl
-    ? await scanLiveUrl(root, { bugsOnly: opts.bugsOnly, probeExposedFiles: opts.probeExposed })
+    ? await scanLiveUrl(root, {
+      bugsOnly: opts.bugsOnly,
+      probeExposedFiles: opts.probeExposed,
+      probeCorsReflection: opts.probeCors,
+      crawlPages: opts.crawlPages,
+    })
     : await scanProjectRoot(root, opts.kind, { bugsOnly: opts.bugsOnly });
   if (isLiveUrl && opts.fix) {
     result.remediation = generateWebRemediation(result, root);

@@ -619,3 +619,73 @@ test('Java/PHP AST call graphs, CFG compound || early-return narrowing, and TLS 
   const nonTls = await inspectTlsCertificate('http://127.0.0.1:80/');
   assert.deepEqual(nonTls, []);
 });
+
+test('Ruby/Kotlin AST call graphs and Live Web Auditor multi-page crawl & CORS reflection probe', async () => {
+  const http = require('node:http');
+  const { scanLiveUrl } = require('../electron/web-auditor.cjs');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-cycle5-'));
+
+  // 1. Ruby cross-file taint
+  await fs.writeFile(path.join(dir, 'shell.rb'), [
+    'def run_cmd(cmd)',
+    '  system("sh -c " + cmd)',
+    'end',
+  ].join('\n'));
+  await fs.writeFile(path.join(dir, 'ctrl.rb'), [
+    'def handle',
+    '  q = params[:q]',
+    '  run_cmd(q)',
+    'end',
+  ].join('\n'));
+
+  // 2. Kotlin cross-file taint
+  await fs.writeFile(path.join(dir, 'Repo.kt'), [
+    'fun queryUser(name: String) {',
+    '  stmt.executeQuery("SELECT * FROM users WHERE name = " + name)',
+    '}',
+  ].join('\n'));
+  await fs.writeFile(path.join(dir, 'Routes.kt'), [
+    'fun handle(call: ApplicationCall) {',
+    '  val name = call.parameters["name"]',
+    '  queryUser(name)',
+    '}',
+  ].join('\n'));
+
+  const report = await scanProjectRoot(dir, 'API / backend', { bugsOnly: true });
+  const ids = new Set(report.findings.map((f) => f.ruleId));
+  assert.ok(ids.has('rb-crossfile-taint'), 'detects Ruby AST call-graph cross-file taint');
+  assert.ok(ids.has('kt-crossfile-taint'), 'detects Kotlin AST call-graph cross-file taint');
+
+  // 3. Multi-page crawl + CORS Origin reflection
+  const srv = http.createServer((req, res) => {
+    const reqOrigin = req.headers.origin;
+    const headers = { 'content-type': 'text/html' };
+    if (reqOrigin) {
+      headers['access-control-allow-origin'] = reqOrigin;
+      headers['access-control-allow-credentials'] = 'true';
+    }
+    if (req.url === '/login') {
+      res.writeHead(200, headers);
+      res.end('<!doctype html><html><body><script src="https://cdn.example.org/app.js"></script></body></html>');
+      return;
+    }
+    res.writeHead(200, headers);
+    res.end('<!doctype html><html><body><a href="/login">Login</a></body></html>');
+  });
+
+  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  try {
+    const { port } = srv.address();
+    const webReport = await scanLiveUrl(`http://127.0.0.1:${port}/`, {
+      bugsOnly: true,
+      crawlPages: 3,
+      probeCorsReflection: true,
+    });
+    const webIds = new Set(webReport.findings.map((f) => f.ruleId));
+    assert.equal(webReport.scannedFiles, 2, 'crawls linked same-origin /login page');
+    assert.ok(webIds.has('web-cors-origin-reflection'), 'detects reflected Origin with credentials');
+    assert.ok(webIds.has('web-missing-sri'), 'detects missing SRI on crawled /login page');
+  } finally {
+    await new Promise((resolve) => srv.close(resolve));
+  }
+});

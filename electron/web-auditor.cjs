@@ -300,26 +300,38 @@ async function scanLiveUrl(targetUrl, options = {}) {
   const tlsFindings = finalUrl.startsWith('https://')
     ? await inspectTlsCertificate(finalUrl, Math.min(options.timeoutMs || 5000, 5000))
     : [];
+  const corsFindings = options.probeCorsReflection
+    ? await probeCorsOriginReflection(finalUrl, Math.min(options.timeoutMs || 5000, 5000))
+    : [];
   const exposedFindings = options.probeExposedFiles ? await probeExposedSensitivePaths(new URL(finalUrl).origin, options.timeoutMs || 5000) : [];
   const htmlList = [];
+  let crawledCount = html ? 1 : 0;
 
-  if (html) {
+  const scanHtmlPage = (pageHtml, pageUrl, pageName) => {
     const catalog = rulesForKind('Website');
-    const htmlRes = scanFileContent(html, 'index.html', '.html', 'html', catalog, new Map());
+    const htmlRes = scanFileContent(pageHtml, pageName, '.html', 'html', catalog, new Map());
     const htmlFindings = Array.isArray(htmlRes) ? htmlRes : (htmlRes?.findings || []);
     for (const f of htmlFindings) {
-      if (options.bugsOnly && STYLE_HINT_RULES.has(f.ruleId)) {
-        continue;
-      }
-      if (options.bugsOnly && f.ruleId === 'html-form-get' && /role\s*=\s*["']search["']|search/i.test(f.excerpt || '')) {
-        continue;
-      }
+      if (options.bugsOnly && STYLE_HINT_RULES.has(f.ruleId)) continue;
+      if (options.bugsOnly && f.ruleId === 'html-form-get' && /role\s*=\s*["']search["']|search/i.test(f.excerpt || '')) continue;
       htmlList.push(f);
     }
-    htmlList.push(...analyzeHtmlLiveChecks(html, finalUrl));
+    htmlList.push(...analyzeHtmlLiveChecks(pageHtml, pageUrl));
+  };
+
+  if (html) {
+    scanHtmlPage(html, finalUrl, 'index.html');
+    const maxExtra = Math.max(0, Math.min(10, Number(options.crawlPages) || 0));
+    if (maxExtra > 0) {
+      const extraPages = await crawlSameOriginPages(html, finalUrl, maxExtra, Math.min(options.timeoutMs || 5000, 5000));
+      for (const page of extraPages) {
+        crawledCount++;
+        scanHtmlPage(page.html, page.url, page.name);
+      }
+    }
   }
 
-  const combined = [...headerFindings, ...tlsFindings, ...exposedFindings, ...(options.bugsOnly ? dedupeByCweLocation(htmlList) : htmlList)];
+  const combined = [...headerFindings, ...tlsFindings, ...corsFindings, ...exposedFindings, ...(options.bugsOnly ? dedupeByCweLocation(htmlList) : htmlList)];
   const capped = combined.slice(0, options.maxFindings || 1000);
   const severityCounts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const f of capped) {
@@ -330,7 +342,7 @@ async function scanLiveUrl(targetUrl, options = {}) {
     root: finalUrl,
     kind: 'Live Website',
     status: res.status,
-    scannedFiles: html ? 1 : 0,
+    scannedFiles: crawledCount,
     totalRules: 10 + (html ? rulesForKind('Website').length : 0),
     totalChecks: 10 + (html ? rulesForKind('Website').length : 0),
     durationMs: Date.now() - startedAt,
@@ -727,9 +739,89 @@ function inspectTlsCertificate(targetUrl, timeoutMs = 4000) {
   });
 }
 
+async function probeCorsOriginReflection(targetUrl, timeoutMs = 4000) {
+  const probeOrigin = 'https://evil.osien-audit.invalid';
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(targetUrl, {
+      method: 'GET',
+      redirect: 'manual',
+      headers: {
+        'user-agent': 'OSIEN-Probe-Auditor/1.0',
+        origin: probeOrigin,
+      },
+      signal: ctrl.signal,
+    });
+    const acao = (r.headers.get('access-control-allow-origin') || '').trim();
+    const acac = (r.headers.get('access-control-allow-credentials') || '').trim().toLowerCase();
+    if (acao === probeOrigin) {
+      return [makeWebFinding({
+        id: 'web-cors-origin-reflection',
+        title: `CORS reflects arbitrary Origin header${acac === 'true' ? ' with credentials' : ''}`,
+        severity: acac === 'true' ? 'critical' : 'high',
+        cwe: 'CWE-942',
+        hint: 'Validate the Origin header against a strict allowlist instead of echoing it back in Access-Control-Allow-Origin.',
+        reason: `Sending Origin: ${probeOrigin} returned Access-Control-Allow-Origin: ${acao}.`,
+        url: targetUrl,
+        excerpt: `Access-Control-Allow-Origin: ${acao}`,
+      })];
+    }
+    return [];
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function crawlSameOriginPages(landingHtml, baseUrl, maxPages, timeoutMs = 4000) {
+  let base;
+  try { base = new URL(baseUrl); } catch { return []; }
+  const seen = new Set([base.pathname]);
+  const targets = [];
+  const hrefRe = /<(?:a|form)\b[^>]*(?:href|action)\s*=\s*["']([^"'#]+)["']/gi;
+  let m;
+  while ((m = hrefRe.exec(landingHtml)) !== null && targets.length < maxPages) {
+    const rawHref = m[1].trim();
+    if (!rawHref || /^(?:mailto:|tel:|javascript:|data:)/i.test(rawHref)) continue;
+    if (!URL.canParse(rawHref, base.origin)) continue;
+    const u = new URL(rawHref, base.origin);
+    if (u.origin !== base.origin || seen.has(u.pathname)) continue;
+    if (/\.(?:png|jpe?g|gif|svg|webp|ico|css|js|woff2?|pdf|zip)$/i.test(u.pathname)) continue;
+    seen.add(u.pathname);
+    targets.push(u);
+  }
+
+  const pages = [];
+  for (const u of targets) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const r = await fetch(u.toString(), {
+        redirect: 'follow',
+        headers: { 'user-agent': 'OSIEN-Probe-Auditor/1.0' },
+        signal: ctrl.signal,
+      });
+      if (!r.ok) continue;
+      const ct = r.headers.get('content-type') || '';
+      if (/text\/html|application\/xhtml/i.test(ct)) {
+        const body = await r.text();
+        pages.push({ url: r.url || u.toString(), name: u.pathname.replace(/^\/+/, '') || 'page.html', html: body });
+      }
+    } catch {
+      // Ignore unreachable linked page during passive crawl
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return pages;
+}
+
 module.exports = {
   scanLiveUrl,
   analyzeHttpHeaders,
   generateWebRemediation,
   inspectTlsCertificate,
+  probeCorsOriginReflection,
 };

@@ -15,6 +15,8 @@ function getAstGrep() {
       rust: require('@ast-grep/lang-rust'),
       java: require('@ast-grep/lang-java'),
       php: require('@ast-grep/lang-php'),
+      ruby: require('@ast-grep/lang-ruby'),
+      kotlin: require('@ast-grep/lang-kotlin'),
     });
     astGrep = { parse };
   } catch {
@@ -458,6 +460,13 @@ const JAVA_SANITIZER_RE = /\b(?:Integer\.parseInt|Long\.parseLong|Paths\.get\([^
 const JAVA_SINK_RE = /\b(?:executeQuery|executeUpdate|createNativeQuery|Runtime\.getRuntime\(\)\.exec|new\s+ProcessBuilder|Files\.readString)\b/;
 
 const PHP_SOURCE_RE = /\$_(?:GET|POST|REQUEST|COOKIE|SERVER)\b/;
+const RB_SOURCE_RE = /\b(?:params\[|request\.headers\[|cookies\[|ARGV\[)/;
+const RB_SANITIZER_RE = /\b(?:Integer\(|Float\(|Shellwords\.escape|File\.basename)\b/;
+const RB_SINK_RE = /\b(?:system|exec|eval|instance_eval|find_by_sql|Marshal\.load|YAML\.load)\s*\(/;
+
+const KT_SOURCE_RE = /\b(?:call\.parameters\[|call\.request\.queryParameters|intent\.getStringExtra|@RequestParam|@PathVariable)/;
+const KT_SANITIZER_RE = /\.toIntOrNull\s*\(|\.toLongOrNull\s*\(|Paths\.get\([^)]*\)\.fileName/;
+const KT_SINK_RE = /\b(?:executeQuery|createNativeQuery|Runtime\.getRuntime\(\)\.exec|ProcessBuilder|webView\.loadUrl)\b/;
 const PHP_SANITIZER_RE = /\b(?:intval|floatval|escapeshellarg|htmlspecialchars|basename)\s*\(/;
 const PHP_SINK_RE = /\b(?:mysqli_query|mysql_query|pg_query|shell_exec|exec|system|passthru|unserialize|eval)\s*\(/;
 
@@ -522,6 +531,30 @@ const LANG_CG_SPEC = {
     hint: (fnName, sinkMeta) => `Use PDO prepared statements or escapeshellarg() before calling "${fnName}()" (${sinkMeta.file}:${sinkMeta.line}).`,
     title: (fnName, sinkMeta) => `Cross-file taint: superglobal input passed to "${fnName}()" (${sinkMeta.file}:${sinkMeta.line})`,
   },
+  '.rb': {
+    lang: 'ruby',
+    fnKinds: ['method', 'singleton_method'],
+    assignKinds: ['assignment'],
+    callKinds: ['call'],
+    sourceRe: RB_SOURCE_RE,
+    sanitizerRe: RB_SANITIZER_RE,
+    sinkRe: RB_SINK_RE,
+    ruleId: 'rb-crossfile-taint',
+    hint: (fnName, sinkMeta) => `Sanitize or parameterize input before calling "${fnName}()" (${sinkMeta.file}:${sinkMeta.line}).`,
+    title: (fnName, sinkMeta) => `Cross-file taint: request input passed to "${fnName}()" (${sinkMeta.file}:${sinkMeta.line})`,
+  },
+  '.kt': {
+    lang: 'kotlin',
+    fnKinds: ['function_declaration'],
+    assignKinds: ['property_declaration', 'assignment'],
+    callKinds: ['call_expression'],
+    sourceRe: KT_SOURCE_RE,
+    sanitizerRe: KT_SANITIZER_RE,
+    sinkRe: KT_SINK_RE,
+    ruleId: 'kt-crossfile-taint',
+    hint: (fnName, sinkMeta) => `Use parameterized queries or validate input before calling "${fnName}()" (${sinkMeta.file}:${sinkMeta.line}).`,
+    title: (fnName, sinkMeta) => `Cross-file taint: untrusted input passed to "${fnName}()" (${sinkMeta.file}:${sinkMeta.line})`,
+  },
 };
 
 function parseFnSignature(fnText, extName) {
@@ -550,7 +583,7 @@ function parseFnSignature(fnText, extName) {
     return { fnName: m[1], params };
   }
   if (extName === '.java') {
-    const m = fnText.match(/^(?:(?:public|private|protected|static|final|synchronized)\s+)*[A-Za-z_][\w<>[\],\s]*\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/);
+    const m = fnText.match(/^(?:(?:public|private|protected|static|final|synchronized)\s+){0,4}[A-Za-z_][\w<>[\],\s]*\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/);
     if (!m) return null;
     const params = m[2].split(',')
       .map((p) => p.trim().replace(/@\w+(?:\([^)]*\))?\s*/g, '').split(/\s+/).pop() || '')
@@ -558,13 +591,29 @@ function parseFnSignature(fnText, extName) {
     return { fnName: m[1], params };
   }
   if (extName === '.php') {
-    const m = fnText.match(/^(?:(?:public|private|protected|static)\s+)*function\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/);
+    const m = fnText.match(/^(?:(?:public|private|protected|static)\s+){0,4}function\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/);
     if (!m) return null;
     const params = m[2].split(',')
       .map((p) => {
         const vm = p.match(/\$([A-Za-z_]\w*)/);
         return vm ? vm[1] : '';
       })
+      .filter((p) => /^[A-Za-z_]\w*$/.test(p));
+    return { fnName: m[1], params };
+  }
+  if (extName === '.rb') {
+    const m = fnText.match(/^def\s+(?:self\.)?([A-Za-z_]\w*[!?]?)\s*(?:\(([^)]*)\))?/);
+    if (!m) return null;
+    const params = (m[2] || '').split(',')
+      .map((p) => p.trim().split(/[=:]/)[0].trim().replace(/^[*&]+/, ''))
+      .filter((p) => /^[A-Za-z_]\w*$/.test(p));
+    return { fnName: m[1], params };
+  }
+  if (extName === '.kt') {
+    const m = fnText.match(/^(?:(?:public|private|internal|override|suspend)\s+){0,4}fun\s+(?:<[^>]*>\s*)?([A-Za-z_]\w*)\s*\(([^)]*)\)/);
+    if (!m) return null;
+    const params = m[2].split(',')
+      .map((p) => p.trim().split(':')[0].trim().replace(/^vararg\s+/, ''))
       .filter((p) => /^[A-Za-z_]\w*$/.test(p));
     return { fnName: m[1], params };
   }
@@ -598,6 +647,7 @@ function parseAssignPair(text, extName) {
   let clean = text.trim();
   if (extName === '.rs') clean = clean.replace(/^let\s+(?:mut\s+)?/, '').replace(/;$/, '');
   if (extName === '.java' || extName === '.php') clean = clean.replace(/;$/, '');
+  if (extName === '.kt') clean = clean.replace(/^(?:val|var)\s+/, '');
   const sep = extName === '.go' && clean.includes(':=') ? ':=' : '=';
   const idx = clean.indexOf(sep);
   if (idx < 0) return null;
@@ -606,7 +656,9 @@ function parseAssignPair(text, extName) {
     ? (lhsRaw.split(/\s+/).pop() || '')
     : extName === '.php'
       ? (lhsRaw.match(/\$([A-Za-z_]\w*)/)?.[1] || '')
-      : lhsRaw.split(/[\s,]+/)[0];
+      : extName === '.kt'
+        ? lhsRaw.split(':')[0].trim()
+        : lhsRaw.split(/[\s,]+/)[0];
   const rhs = clean.slice(idx + sep.length).trim();
   if (!/^[A-Za-z_]\w*$/.test(lhs)) return null;
   return { lhs, rhs };
@@ -689,7 +741,7 @@ function buildAstCallGraph(polyglotFiles, ag) {
           }
         }
 
-        const calleeMatch = cText.match(/^(?:[\w$]+(?:\.|::|->))*([A-Za-z_]\w*)\s*\(/);
+        const calleeMatch = cText.match(/^(?:[\w$.:>-]+(?:\.|::|->))?([A-Za-z_]\w*)\s*\(/);
         if (calleeMatch) {
           const calleeName = calleeMatch[1];
           const args = splitCallArgs(cText);
