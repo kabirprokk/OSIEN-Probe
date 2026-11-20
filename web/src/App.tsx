@@ -1,5 +1,4 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import Lenis from 'lenis';
 import * as Tabs from '@radix-ui/react-tabs';
 import { AnimatePresence, motion } from 'motion/react';
 import {
@@ -22,7 +21,7 @@ import { OsienWaveScroll } from './components/OsienWaveScroll';
 import { DiamondCursor } from './components/DiamondCursor';
 import { LaunchLoader } from './components/LaunchLoader';
 import { BlackHoleTransition } from './components/BlackHoleTransition';
-import DecryptedText from './components/DecryptedText';
+const DecryptedText = lazy(() => import('./components/DecryptedText'));
 
 const ProbeScrollScene = lazy(async () => {
   const m = await import('./components/ProbeScrollScene');
@@ -95,6 +94,26 @@ export default function App() {
   const [modelReady, setModelReady] = useState(false);
   const [fontsReady, setFontsReady] = useState(false);
 
+  // Only mount heavy WebGL2 ASCIIText when Section 05 scrolls near viewport
+  const [showAscii, setShowAscii] = useState(false);
+
+  useEffect(() => {
+    if (page !== 'home' || showAscii) return;
+    const el = document.getElementById('next');
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setShowAscii(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: '250px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [page, showAscii]);
+
   // Defer heavy WebGL scene in reduced-motion / audit mode until user interaction so TBT stays ~0ms
   useEffect(() => {
     if (mountHeavy3D) return;
@@ -144,28 +163,38 @@ export default function App() {
   );
   const sceneReady = modelReady && fontsReady;
 
-  // Smooth momentum scroll powered by Lenis (paired with hard-scroll velocity physics in 3D)
+  // Smooth momentum scroll powered by Lenis (only when interactive 3D/effects are mounted)
   useEffect(() => {
+    if (!mountHeavy3D) return;
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const lenis = new Lenis({
-      duration: 1.12,
-      easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
-      smoothWheel: true,
-      wheelMultiplier: 1.05,
-    });
-
+    let alive = true;
     let rafId = 0;
-    const raf = (time: number) => {
-      lenis.raf(time);
-      rafId = requestAnimationFrame(raf);
-    };
-    rafId = requestAnimationFrame(raf);
+    let lenisInstance: { raf: (t: number) => void; destroy: () => void } | null = null;
+
+    import('lenis')
+      .then(({ default: Lenis }) => {
+        if (!alive) return;
+        const lenis = new Lenis({
+          duration: 1.12,
+          easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
+          smoothWheel: true,
+          wheelMultiplier: 1.05,
+        });
+        lenisInstance = lenis;
+        const raf = (time: number) => {
+          lenis.raf(time);
+          rafId = requestAnimationFrame(raf);
+        };
+        rafId = requestAnimationFrame(raf);
+      })
+      .catch(() => null);
 
     return () => {
+      alive = false;
       cancelAnimationFrame(rafId);
-      lenis.destroy();
+      lenisInstance?.destroy();
     };
-  }, []);
+  }, [mountHeavy3D]);
 
   useEffect(() => {
     const onScroll = () => setShowTopBtn(window.scrollY > 520);
@@ -250,7 +279,7 @@ export default function App() {
       )}
       <BlackHoleTransition active={transitioning} destination={transitionDest} />
       <DiamondCursor />
-      <OsienWaveScroll />
+      {mountHeavy3D && <OsienWaveScroll />}
       {mountHeavy3D && (
         <Suspense fallback={null}>
           <ProbeScrollScene
@@ -278,8 +307,7 @@ export default function App() {
           >
             <img src="/logo.svg" width="30" height="30" alt="" />
             <span>
-              <DecryptedText text="OSIEN PROBE" animateOn="hover" speed={35} />
-              <span className="brand-dot">.</span>
+              OSIEN PROBE<span className="brand-dot">.</span>
             </span>
           </a>
           <span className="brand-sep" aria-hidden="true">
@@ -291,7 +319,7 @@ export default function App() {
             target="_blank"
             rel="noreferrer"
           >
-            <DecryptedText text="OSIEN" animateOn="hover" speed={35} />
+            OSIEN
           </a>
         </div>
 
@@ -318,7 +346,7 @@ export default function App() {
               }
             }}
           >
-            <DecryptedText text="Scan" animateOn="hover" speed={35} />
+            Scan
           </a>
           <a
             href="#engine"
@@ -331,7 +359,7 @@ export default function App() {
               }
             }}
           >
-            <DecryptedText text="Engine" animateOn="hover" speed={35} />
+            Engine
           </a>
           <a
             href="#docs"
@@ -341,7 +369,7 @@ export default function App() {
               openDocs();
             }}
           >
-            <DecryptedText text="Docs" animateOn="hover" speed={35} />
+            Docs
           </a>
           <a
             className="nav-github"
@@ -349,8 +377,7 @@ export default function App() {
             target="_blank"
             rel="noreferrer"
           >
-            <DecryptedText text="GitHub" animateOn="hover" speed={35} />{' '}
-            <ArrowUpRight size={14} aria-hidden="true" />
+            GitHub <ArrowUpRight size={14} aria-hidden="true" />
           </a>
         </nav>
       </header>
@@ -367,61 +394,71 @@ export default function App() {
               <div className="hero-copy">
                 <p className="eyebrow">
                   <span className="status-dot" aria-hidden="true" />
-                  <DecryptedText text="OFFLINE STATIC SCANNER" speed={45} />
+                  OFFLINE STATIC SCANNER
                 </p>
 
                 {/* Official React Bits TechText Tag Display */}
                 <div className="hero-tech-tag">
-                  <Suspense fallback={<span className="tech-text-fallback">OSIEN PROBE</span>}>
-                    <TechText
-                      text="OSIEN PROBE"
-                      fontFamily="'Space Grotesk', sans-serif"
-                      fontWeight={600}
-                      fontSize={96}
-                      align="left"
-                      color="#ffffff"
-                      accentColor="#a3ff12"
-                      reveal="letter"
-                      dashLength={4}
-                      dashGap={2}
-                      specks={15}
-                      intro="none"
-                      introDuration={2}
-                      clickKick
-                      guides={false}
-                    />
-                  </Suspense>
+                  {mountHeavy3D ? (
+                    <Suspense fallback={<span className="tech-text-fallback">OSIEN PROBE</span>}>
+                      <TechText
+                        text="OSIEN PROBE"
+                        fontFamily="'Space Grotesk', sans-serif"
+                        fontWeight={600}
+                        fontSize={96}
+                        align="left"
+                        color="#ffffff"
+                        accentColor="#a3ff12"
+                        reveal="letter"
+                        dashLength={4}
+                        dashGap={2}
+                        specks={15}
+                        intro="none"
+                        introDuration={2}
+                        clickKick
+                        guides={false}
+                      />
+                    </Suspense>
+                  ) : (
+                    <span className="tech-text-fallback">OSIEN PROBE</span>
+                  )}
                 </div>
 
                 <h1 className="hero-sub-display">
                   <span className="hero-line">
-                    <DecryptedText text="Inspect every line." animateOn="hover" speed={42} />
+                    {mountHeavy3D ? (
+                      <Suspense fallback="Inspect every line.">
+                        <DecryptedText text="Inspect every line." animateOn="hover" speed={42} />
+                      </Suspense>
+                    ) : (
+                      'Inspect every line.'
+                    )}
                   </span>
                   <span className="hero-line hero-line-accent">
-                    <DecryptedText text="Execute nothing." animateOn="hover" speed={46} />
+                    {mountHeavy3D ? (
+                      <Suspense fallback="Execute nothing.">
+                        <DecryptedText text="Execute nothing." animateOn="hover" speed={46} />
+                      </Suspense>
+                    ) : (
+                      'Execute nothing.'
+                    )}
                   </span>
                 </h1>
 
                 <p className="hero-intro">
-                  <DecryptedText
-                    text="Local 11-language AST bug finder, secret scanner, and MCP server."
-                    animateOn="hover"
-                    speed={36}
-                  />
+                  Local 11-language AST bug finder, secret scanner, and MCP server.
                 </p>
 
                 <div className="hero-actions">
                   <a className="button button-primary" href="#quickstart">
-                    <DecryptedText text="Quickstart" animateOn="hover" speed={35} scrambleColor="#050505" />{' '}
-                    <ArrowDown size={15} aria-hidden="true" />
+                    Quickstart <ArrowDown size={15} aria-hidden="true" />
                   </a>
                   <button
                     type="button"
                     className="osien-editorial-link osien-link-btn"
                     onClick={openDocs}
                   >
-                    <DecryptedText text="Read Docs" animateOn="hover" speed={35} />{' '}
-                    <ArrowRight size={14} aria-hidden="true" />
+                    Read Docs <ArrowRight size={14} aria-hidden="true" />
                   </button>
                 </div>
               </div>
@@ -441,11 +478,11 @@ export default function App() {
             >
               <div className="section-kicker">
                 <span>
-                  <DecryptedText text="01 / LIVE SCAN" speed={42} />
+                  01 / LIVE SCAN
                 </span>
                 <span className="kicker-line" />
                 <span id="preview-title">
-                  <DecryptedText text="CWEs · Taint · Score" speed={42} />
+                  CWEs · Taint · Score
                 </span>
               </div>
               <AuditPreview />
@@ -455,11 +492,11 @@ export default function App() {
             <section className="features section-wrap" id="engine">
               <div className="section-kicker">
                 <span>
-                  <DecryptedText text="02 / ENGINE" speed={42} />
+                  02 / ENGINE
                 </span>
                 <span className="kicker-line" />
                 <span>
-                  <DecryptedText text="Zero cloud · Zero execution" speed={42} />
+                  Zero cloud · Zero execution
                 </span>
               </div>
 
@@ -471,13 +508,13 @@ export default function App() {
                 transition={{ duration: 0.65, ease: REVEAL_EASE }}
               >
                 <p className="editorial-label">
-                  <DecryptedText text="Signal only" speed={45} />
+                  Signal only
                 </p>
                 <h2>
-                  <DecryptedText text="Built for precision." speed={42} />
+                  {mountHeavy3D ? (<Suspense fallback="Built for precision."><DecryptedText animateOn="inViewHover" text="Built for precision." speed={42} /></Suspense>) : 'Built for precision.'}
                   <br />
                   <em>
-                    <DecryptedText text="Honest about limits." speed={45} />
+                    {mountHeavy3D ? (<Suspense fallback="Honest about limits."><DecryptedText animateOn="inViewHover" text="Honest about limits." speed={45} /></Suspense>) : 'Honest about limits.'}
                   </em>
                 </h2>
               </motion.div>
@@ -491,13 +528,10 @@ export default function App() {
                     </span>
                   </div>
                   <h3>
-                    <DecryptedText text="11-language AST" speed={42} />
+                    {mountHeavy3D ? (<Suspense fallback="11-language AST"><DecryptedText animateOn="inViewHover" text="11-language AST" speed={42} /></Suspense>) : '11-language AST'}
                   </h3>
                   <p>
-                    <DecryptedText
-                      text="Syntax-aware checks across JS/TS, Python, Go, Rust, Java, C++, and Bash."
-                      speed={32}
-                    />
+                    Syntax-aware checks across JS/TS, Python, Go, Rust, Java, C++, and Bash.
                   </p>
                   <div className="feature-tags">
                     <span>Babel</span>
@@ -514,13 +548,10 @@ export default function App() {
                     </span>
                   </div>
                   <h3>
-                    <DecryptedText text="Taint & secrets" speed={42} />
+                    {mountHeavy3D ? (<Suspense fallback="Taint & secrets"><DecryptedText animateOn="inViewHover" text="Taint & secrets" speed={42} /></Suspense>) : 'Taint & secrets'}
                   </h3>
                   <p>
-                    <DecryptedText
-                      text="Tracks input-to-sink flows and flags leaked keys by entropy."
-                      speed={32}
-                    />
+                    Tracks input-to-sink flows and flags leaked keys by entropy.
                   </p>
                   <div className="taint-bar">
                     <code>req.query</code>
@@ -537,13 +568,10 @@ export default function App() {
                     </span>
                   </div>
                   <h3>
-                    <DecryptedText text="Local AI & SARIF" speed={42} />
+                    {mountHeavy3D ? (<Suspense fallback="Local AI & SARIF"><DecryptedText animateOn="inViewHover" text="Local AI & SARIF" speed={42} /></Suspense>) : 'Local AI & SARIF'}
                   </h3>
                   <p>
-                    <DecryptedText
-                      text="Optional Ollama triage with fast-fail, plus SARIF 2.1.0 CI gating."
-                      speed={32}
-                    />
+                    Optional Ollama triage with fast-fail, plus SARIF 2.1.0 CI gating.
                   </p>
                   <div className="feature-code">
                     <span>qwen3.5:0.8b</span>
@@ -557,11 +585,11 @@ export default function App() {
             <section className="surfaces section-wrap" id="surfaces">
               <div className="section-kicker">
                 <span>
-                  <DecryptedText text="03 / SURFACES" speed={42} />
+                  03 / SURFACES
                 </span>
                 <span className="kicker-line" />
                 <span>
-                  <DecryptedText text="One core everywhere" speed={42} />
+                  One core everywhere
                 </span>
               </div>
 
@@ -576,10 +604,10 @@ export default function App() {
                   transition={{ duration: 0.65, ease: REVEAL_EASE }}
                 >
                   <h2>
-                    <DecryptedText text="One engine." speed={42} />
+                    {mountHeavy3D ? (<Suspense fallback="One engine."><DecryptedText animateOn="inViewHover" text="One engine." speed={42} /></Suspense>) : 'One engine.'}
                     <br />
                     <em>
-                      <DecryptedText text="Three surfaces." speed={45} />
+                      {mountHeavy3D ? (<Suspense fallback="Three surfaces."><DecryptedText animateOn="inViewHover" text="Three surfaces." speed={45} /></Suspense>) : 'Three surfaces.'}
                     </em>
                   </h2>
 
@@ -588,13 +616,10 @@ export default function App() {
                       <span className="step-number">01</span>
                       <div>
                         <h3>
-                          <DecryptedText text="Desktop App" speed={42} />
+                          {mountHeavy3D ? (<Suspense fallback="Desktop App"><DecryptedText animateOn="inViewHover" text="Desktop App" speed={42} /></Suspense>) : 'Desktop App'}
                         </h3>
                         <p>
-                          <DecryptedText
-                            text="Scan folders or Git URLs offline. Opt-in test runs."
-                            speed={34}
-                          />
+                          Scan folders or Git URLs offline. Opt-in test runs.
                         </p>
                       </div>
                     </li>
@@ -602,7 +627,7 @@ export default function App() {
                       <span className="step-number">02</span>
                       <div>
                         <h3>
-                          <DecryptedText text="CLI & CI Gate" speed={42} />
+                          {mountHeavy3D ? (<Suspense fallback="CLI & CI Gate"><DecryptedText animateOn="inViewHover" text="CLI & CI Gate" speed={42} /></Suspense>) : 'CLI & CI Gate'}
                         </h3>
                         <p>
                           <code>probe scan --sarif --fail-on high</code>
@@ -613,13 +638,10 @@ export default function App() {
                       <span className="step-number">03</span>
                       <div>
                         <h3>
-                          <DecryptedText text="Stdio MCP" speed={42} />
+                          {mountHeavy3D ? (<Suspense fallback="Stdio MCP"><DecryptedText animateOn="inViewHover" text="Stdio MCP" speed={42} /></Suspense>) : 'Stdio MCP'}
                         </h3>
                         <p>
-                          <DecryptedText
-                            text="Zero-dependency tool server for AI coding agents."
-                            speed={34}
-                          />
+                          Zero-dependency tool server for AI coding agents.
                         </p>
                       </div>
                     </li>
@@ -632,11 +654,11 @@ export default function App() {
             <section className="get-started section-wrap" id="quickstart">
               <div className="section-kicker">
                 <span>
-                  <DecryptedText text="04 / QUICKSTART" speed={42} />
+                  04 / QUICKSTART
                 </span>
                 <span className="kicker-line" />
                 <span>
-                  <DecryptedText text="MIT · 100% Offline" speed={42} />
+                  MIT · 100% Offline
                 </span>
               </div>
 
@@ -644,22 +666,19 @@ export default function App() {
                 <div className="start-copy">
                   <span className="terminal-label">
                     <span className="status-dot" aria-hidden="true" />
-                    <DecryptedText text="v1.0.1" speed={45} />
+                    v1.0.1
                   </span>
 
                   <h2>
-                    <DecryptedText text="Clone." speed={45} />
+                    {mountHeavy3D ? (<Suspense fallback="Clone."><DecryptedText animateOn="inViewHover" text="Clone." speed={45} /></Suspense>) : 'Clone.'}
                     <br />
                     <em>
-                      <DecryptedText text="Scan." speed={45} />
+                      {mountHeavy3D ? (<Suspense fallback="Scan."><DecryptedText animateOn="inViewHover" text="Scan." speed={45} /></Suspense>) : 'Scan.'}
                     </em>
                   </h2>
 
                   <p>
-                    <DecryptedText
-                      text="Same deterministic engine across desktop, CLI, and MCP."
-                      speed={34}
-                    />
+                    Same deterministic engine across desktop, CLI, and MCP.
                   </p>
 
                   <button
@@ -667,7 +686,7 @@ export default function App() {
                     className="osien-editorial-link osien-link-btn start-readme-link"
                     onClick={openDocs}
                   >
-                    <DecryptedText text="Visual Docs (Human & AI)" animateOn="hover" speed={35} />{' '}
+                    Visual Docs (Human & AI){' '}
                     <ArrowRight size={14} aria-hidden="true" />
                   </button>
                 </div>
@@ -762,28 +781,32 @@ export default function App() {
                 transition={{ duration: 0.65, ease: REVEAL_EASE }}
               >
                 <p className="section-num">
-                  <DecryptedText text="05 / NEXT" speed={45} />
+                  05 / NEXT
                 </p>
 
                 <div className="finale-ascii-wrap">
-                  <Suspense fallback={null}>
-                    <ASCIIText
-                      text="LOCAL."
-                      asciiFontSize={8}
-                      colors={['#ffffff', '#a3ff12', '#c2ff5c']}
-                      textScale={1}
-                      blocks={0.9}
-                      waves={1}
-                      waveSpeed={1}
-                      chroma={1}
-                      tilt={1}
-                      hueShift={0.25}
-                      scramble={0.6}
-                      clickRipple
-                      idle
-                      interactive
-                    />
-                  </Suspense>
+                  {showAscii ? (
+                    <Suspense fallback={<span className="tech-text-fallback">LOCAL.</span>}>
+                      <ASCIIText
+                        text="LOCAL."
+                        asciiFontSize={8}
+                        colors={['#ffffff', '#a3ff12', '#c2ff5c']}
+                        textScale={1}
+                        blocks={0.9}
+                        waves={1}
+                        waveSpeed={1}
+                        chroma={1}
+                        tilt={1}
+                        hueShift={0.25}
+                        scramble={0.6}
+                        clickRipple
+                        idle
+                        interactive
+                      />
+                    </Suspense>
+                  ) : (
+                    <span className="tech-text-fallback">LOCAL.</span>
+                  )}
                 </div>
 
                 <div className="final-cta-actions">
@@ -793,7 +816,7 @@ export default function App() {
                     target="_blank"
                     rel="noreferrer"
                   >
-                    <DecryptedText text="View on GitHub" animateOn="hover" speed={35} />{' '}
+                    View on GitHub{' '}
                     <ArrowUpRight size={15} aria-hidden="true" />
                   </a>
                 </div>
@@ -815,7 +838,7 @@ export default function App() {
           >
             <img src="/logo.svg" alt="" width="22" height="22" />
             <span>
-              <DecryptedText text="OSIEN PROBE" animateOn="hover" speed={35} />
+              OSIEN PROBE
             </span>
           </a>
 
@@ -827,18 +850,18 @@ export default function App() {
                 openDocs();
               }}
             >
-              <DecryptedText text="Docs" animateOn="hover" speed={35} />
+              Docs
             </a>
             <a href="https://osien.is-a.dev/" target="_blank" rel="noreferrer">
-              <DecryptedText text="osien.is-a.dev" animateOn="hover" speed={35} />
+              osien.is-a.dev
             </a>
             <a href="https://github.com/kabirprokk/OSIEN-Probe" target="_blank" rel="noreferrer">
-              <DecryptedText text="GitHub" animateOn="hover" speed={35} />
+              GitHub
             </a>
           </div>
 
           <span className="footer-copy">
-            <DecryptedText text={`© ${new Date().getFullYear()} OSIEN · MIT`} speed={35} />
+            © {new Date().getFullYear()} OSIEN · MIT
           </span>
         </div>
       </footer>

@@ -2,7 +2,6 @@ import { useState } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
 import { AnimatePresence, motion } from 'motion/react';
 import { ShieldAlert, FileCode2, Cpu, CheckCircle2 } from 'lucide-react';
-import DecryptedText from './DecryptedText';
 
 type CategoryKey = 'website' | 'api' | 'software';
 
@@ -274,9 +273,7 @@ export function AuditPreview() {
                       {finding.file}:{finding.line}
                     </span>
                   </div>
-                  <p className="finding-title">
-                    <DecryptedText text={finding.title} animateOn="hover" speed={30} />
-                  </p>
+                  <p className="finding-title">{finding.title}</p>
                 </button>
               );
             })}
@@ -322,15 +319,11 @@ export function AuditPreview() {
                 <div className="inspector-meta-grid">
                   <div className="inspector-block">
                     <span className="inspector-label">TRACE</span>
-                    <p className="inspector-mono">
-                      <DecryptedText text={selectedFinding.trace} speed={30} />
-                    </p>
+                    <p className="inspector-mono">{selectedFinding.trace}</p>
                   </div>
                   <div className="inspector-block">
                     <span className="inspector-label">FIX</span>
-                    <p>
-                      <DecryptedText text={selectedFinding.fix} speed={30} />
-                    </p>
+                    <p>{selectedFinding.fix}</p>
                   </div>
                 </div>
               </motion.div>
