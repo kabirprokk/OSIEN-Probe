@@ -5,6 +5,7 @@
 ## Links
 - [OSIEN Probe Homepage](https://osienprobe.vercel.app/): Interactive 3D showcase, live scan preview, and quickstart.
 - [OSIEN Probe Documentation](https://osienprobe.vercel.app/#docs): Visual architecture diagrams for humans and MCP/CLI specs for AI agents.
+- [OSIEN Probe History & Roadmap](https://osienprobe.vercel.app/#history): Visual timeline from DeepCheck to OSIEN Probe v1.0.5 and upcoming v1.1+ milestones.
 - [OSIEN Probe GitHub Repository](https://github.com/kabirprokk/OSIEN-Probe): Source code, native Windows/macOS/Linux desktop app, CLI, and MCP server (MIT license).
 - [OSIEN Parent Organization](https://osien.is-a.dev/): The broader OSIEN software and developer tooling ecosystem.
 

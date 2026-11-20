@@ -2259,3 +2259,89 @@ html[data-quality='balanced'] .start-panel,
 html[data-quality='balanced'] .bh-transition {
   backdrop-filter: blur(12px);
 }
+
+/* ── History & Roadmap Page ── */
+.history-grid {
+  margin-top: 22px;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+.history-card {
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(10, 10, 10, 0.88);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.history-card.is-now {
+  border-color: var(--accent);
+  background: linear-gradient(155deg, rgba(163, 255, 18, 0.08), rgba(10, 10, 10, 0.92));
+}
+
+.history-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+
+.history-era {
+  color: var(--accent);
+}
+
+.history-ver {
+  color: var(--muted);
+}
+
+.history-card h3 {
+  font-family: var(--display);
+  font-size: 20px;
+  font-weight: 500;
+  margin: 4px 0 0;
+  color: var(--ink);
+}
+
+.history-card p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--ink-dim);
+}
+
+.history-footer-cta {
+  padding: 24px 26px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: rgba(10, 10, 10, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.history-footer-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--ink-dim);
+}
+
+.history-footer-note svg {
+  color: var(--accent);
+  flex: none;
+}
+
+@media (max-width: 820px) {
+  .history-grid {
+    grid-template-columns: 1fr;
+  }
+}

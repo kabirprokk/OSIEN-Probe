@@ -39,6 +39,10 @@ const DocsPage = lazy(async () => {
   const m = await import('./components/DocsPage');
   return { default: m.DocsPage };
 });
+const HistoryPage = lazy(async () => {
+  const m = await import('./components/HistoryPage');
+  return { default: m.HistoryPage };
+});
 const ASCIIText = lazy(() => import('./components/ASCIIText'));
 
 type QuickstartTab = 'cli' | 'desktop' | 'mcp';
@@ -79,8 +83,12 @@ const QUICKSTART_COMMANDS: Record<QuickstartTab, { comment: string; command: str
 const REVEAL_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
 export default function App() {
-  const [page, setPage] = useState<'home' | 'docs'>(() =>
-    window.location.hash === '#docs' ? 'docs' : 'home',
+  const [page, setPage] = useState<'home' | 'docs' | 'history'>(() =>
+    window.location.hash === '#docs'
+      ? 'docs'
+      : window.location.hash === '#history'
+        ? 'history'
+        : 'home',
   );
   const [navOpen, setNavOpen] = useState(false);
   const [qsTab, setQsTab] = useState<QuickstartTab>('cli');
@@ -216,7 +224,9 @@ export default function App() {
     const onHash = () => {
       if (window.location.hash === '#docs') {
         setPage('docs');
-      } else if (page === 'docs' && window.location.hash !== '#docs') {
+      } else if (window.location.hash === '#history') {
+        setPage('history');
+      } else if (page !== 'home') {
         setPage('home');
       }
     };
@@ -228,7 +238,11 @@ export default function App() {
     };
   }, [page]);
 
-  const runPageTransition = (targetPage: 'home' | 'docs', label: string, anchor?: string) => {
+  const runPageTransition = (
+    targetPage: 'home' | 'docs' | 'history',
+    label: string,
+    anchor?: string,
+  ) => {
     if (transitioning) return;
     setNavOpen(false);
     setTransitionDest(label);
@@ -237,8 +251,8 @@ export default function App() {
     // Swap page underneath once black-hole overlay is opaque
     window.setTimeout(() => {
       setPage(targetPage);
-      if (targetPage === 'docs') {
-        window.history.pushState(null, '', '#docs');
+      if (targetPage === 'docs' || targetPage === 'history') {
+        window.history.pushState(null, '', `#${targetPage}`);
         window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
       } else if (anchor) {
         window.history.pushState(null, '', anchor);
@@ -260,6 +274,11 @@ export default function App() {
   const openDocs = () => {
     if (page === 'docs') return;
     runPageTransition('docs', 'DOCS');
+  };
+
+  const openHistory = () => {
+    if (page === 'history') return;
+    runPageTransition('history', 'HISTORY');
   };
 
   const openHome = (anchor?: string) => {
@@ -304,7 +323,7 @@ export default function App() {
       {mountHeavy3D && (
         <Suspense fallback={null}>
           <ProbeScrollScene
-            dimmed={page === 'docs'}
+            dimmed={page !== 'home'}
             onProgress={setModelProgress}
             onReady={() => setModelReady(true)}
           />
@@ -359,7 +378,7 @@ export default function App() {
           <a
             href="#preview"
             onClick={(e) => {
-              if (page === 'docs') {
+              if (page !== 'home') {
                 e.preventDefault();
                 openHome('#preview');
               } else {
@@ -372,7 +391,7 @@ export default function App() {
           <a
             href="#engine"
             onClick={(e) => {
-              if (page === 'docs') {
+              if (page !== 'home') {
                 e.preventDefault();
                 openHome('#engine');
               } else {
@@ -381,6 +400,16 @@ export default function App() {
             }}
           >
             Engine
+          </a>
+          <a
+            href="#history"
+            className={page === 'history' ? 'nav-active' : ''}
+            onClick={(e) => {
+              e.preventDefault();
+              openHistory();
+            }}
+          >
+            History
           </a>
           <a
             href="#docs"
@@ -407,6 +436,10 @@ export default function App() {
         {page === 'docs' ? (
           <Suspense fallback={null}>
             <DocsPage onBack={() => openHome()} />
+          </Suspense>
+        ) : page === 'history' ? (
+          <Suspense fallback={null}>
+            <HistoryPage onBack={() => openHome()} onOpenDocs={openDocs} />
           </Suspense>
         ) : (
           <>
@@ -869,6 +902,15 @@ export default function App() {
           </a>
 
           <div className="footer-mono-links footer-mono-inline">
+            <a
+              href="#history"
+              onClick={(e) => {
+                e.preventDefault();
+                openHistory();
+              }}
+            >
+              History
+            </a>
             <a
               href="#docs"
               onClick={(e) => {
