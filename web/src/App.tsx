@@ -94,11 +94,20 @@ export default function App() {
   const [modelReady, setModelReady] = useState(false);
   const [fontsReady, setFontsReady] = useState(false);
 
-  // Defer heavy WebGL scene in reduced-motion / audit mode until idle so TBT stays ~0ms
+  // Defer heavy WebGL scene in reduced-motion / audit mode until user interaction so TBT stays ~0ms
   useEffect(() => {
     if (mountHeavy3D) return;
-    const id = window.setTimeout(() => setMountHeavy3D(true), 1200);
-    return () => window.clearTimeout(id);
+    const activate = () => setMountHeavy3D(true);
+    window.addEventListener('pointermove', activate, { once: true, passive: true });
+    window.addEventListener('scroll', activate, { once: true, passive: true });
+    window.addEventListener('keydown', activate, { once: true, passive: true });
+    window.addEventListener('touchstart', activate, { once: true, passive: true });
+    return () => {
+      window.removeEventListener('pointermove', activate);
+      window.removeEventListener('scroll', activate);
+      window.removeEventListener('keydown', activate);
+      window.removeEventListener('touchstart', activate);
+    };
   }, [mountHeavy3D]);
 
   // Black-hole page transition state (guaranteed >= 1.15s per route change)
@@ -385,16 +394,17 @@ export default function App() {
 
                 <h1 className="hero-sub-display">
                   <span className="hero-line">
-                    <DecryptedText text="Inspect every line." speed={42} />
+                    <DecryptedText text="Inspect every line." animateOn="hover" speed={42} />
                   </span>
                   <span className="hero-line hero-line-accent">
-                    <DecryptedText text="Execute nothing." speed={46} />
+                    <DecryptedText text="Execute nothing." animateOn="hover" speed={46} />
                   </span>
                 </h1>
 
                 <p className="hero-intro">
                   <DecryptedText
                     text="Local 11-language AST bug finder, secret scanner, and MCP server."
+                    animateOn="hover"
                     speed={36}
                   />
                 </p>

@@ -5,6 +5,7 @@ import { type KeyboardEvent, useEffect, useRef } from 'react';
  * Replaces both the native browser scrollbar and traditional flat progress bars.
  */
 export function OsienWaveScroll() {
+  const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -55,7 +56,7 @@ export function OsienWaveScroll() {
     const onScroll = () => {
       const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
       targetProgress = Math.max(0, Math.min(1, window.scrollY / maxScroll));
-      canvas.setAttribute('aria-valuenow', String(Math.round(targetProgress * 100)));
+      wrapRef.current?.setAttribute('aria-valuenow', String(Math.round(targetProgress * 100)));
       const dy = window.scrollY - lastScrollY;
       lastScrollY = window.scrollY;
       velocity = Math.max(-40, Math.min(40, velocity + dy * 0.14));
@@ -194,7 +195,7 @@ export function OsienWaveScroll() {
     };
   }, []);
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLCanvasElement>) => {
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
     const step = window.innerHeight * 0.4;
     if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
@@ -213,8 +214,8 @@ export function OsienWaveScroll() {
   };
 
   return (
-    <canvas
-      ref={canvasRef}
+    <div
+      ref={wrapRef}
       className="osien-wave-scroll"
       role="slider"
       tabIndex={0}
@@ -224,6 +225,8 @@ export function OsienWaveScroll() {
       aria-valuenow={0}
       title="Click or drag to scroll"
       onKeyDown={handleKeyDown}
-    />
+    >
+      <canvas ref={canvasRef} aria-hidden="true" />
+    </div>
   );
 }

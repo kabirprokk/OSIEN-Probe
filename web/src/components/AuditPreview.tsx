@@ -253,15 +253,14 @@ export function AuditPreview() {
       </div>
 
       <div className="audit-body">
-        <div className="audit-list" role="listbox" aria-label="Findings">
+        <div className="audit-list" role="group" aria-label="Sample scan findings">
           {profile.findings.map((finding) => {
             const isSelected = finding.id === selectedFinding.id;
             return (
               <button
                 key={finding.id}
                 type="button"
-                role="option"
-                aria-selected={isSelected}
+                aria-pressed={isSelected}
                 className={`finding-row ${isSelected ? 'is-selected' : ''}`}
                 onClick={() => setSelectedId(finding.id)}
               >
