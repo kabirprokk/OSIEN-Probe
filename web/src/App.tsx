@@ -19,6 +19,7 @@ import { AuditPreview } from './components/AuditPreview';
 import { SpotlightCard } from './components/SpotlightCard';
 import { OsienWaveScroll } from './components/OsienWaveScroll';
 import { DiamondCursor } from './components/DiamondCursor';
+import { SmartText } from './components/SmartText';
 import { getDeviceQualityProfile } from './lib/deviceProfile';
 const LaunchLoader = lazy(async () => {
   const m = await import('./components/LaunchLoader');
@@ -28,7 +29,6 @@ const BlackHoleTransition = lazy(async () => {
   const m = await import('./components/BlackHoleTransition');
   return { default: m.BlackHoleTransition };
 });
-const DecryptedText = lazy(() => import('./components/DecryptedText'));
 
 const ProbeScrollScene = lazy(async () => {
   const m = await import('./components/ProbeScrollScene');
@@ -386,7 +386,7 @@ export default function App() {
               }
             }}
           >
-            Scan
+            <SmartText text="Scan" priority="accent" active={mountHeavy3D} />
           </a>
           <a
             href="#engine"
@@ -399,7 +399,7 @@ export default function App() {
               }
             }}
           >
-            Engine
+            <SmartText text="Engine" priority="accent" active={mountHeavy3D} />
           </a>
           <a
             href="#history"
@@ -409,7 +409,7 @@ export default function App() {
               openHistory();
             }}
           >
-            History
+            <SmartText text="History" priority="accent" active={mountHeavy3D} />
           </a>
           <a
             href="#docs"
@@ -419,7 +419,7 @@ export default function App() {
               openDocs();
             }}
           >
-            Docs
+            <SmartText text="Docs" priority="accent" active={mountHeavy3D} />
           </a>
           <a
             className="nav-github"
@@ -427,7 +427,8 @@ export default function App() {
             target="_blank"
             rel="noreferrer"
           >
-            GitHub <ArrowUpRight size={14} aria-hidden="true" />
+            <SmartText text="GitHub" priority="accent" active={mountHeavy3D} />{' '}
+            <ArrowUpRight size={14} aria-hidden="true" />
           </a>
         </nav>
       </header>
@@ -448,7 +449,7 @@ export default function App() {
               <div className="hero-copy">
                 <p className="eyebrow">
                   <span className="status-dot" aria-hidden="true" />
-                  OFFLINE STATIC SCANNER
+                  <SmartText text="OFFLINE STATIC SCANNER" priority="accent" active={mountHeavy3D} />
                 </p>
 
                 {/* Official React Bits TechText Tag Display */}
@@ -480,40 +481,33 @@ export default function App() {
 
                 <h1 className="hero-sub-display">
                   <span className="hero-line">
-                    {mountHeavy3D ? (
-                      <Suspense fallback="Inspect every line.">
-                        <DecryptedText text="Inspect every line." animateOn="hover" speed={42} />
-                      </Suspense>
-                    ) : (
-                      'Inspect every line.'
-                    )}
+                    <SmartText text="Inspect every line." priority="heading" animateOn="hover" speed={42} active={mountHeavy3D} />
                   </span>
                   <span className="hero-line hero-line-accent">
-                    {mountHeavy3D ? (
-                      <Suspense fallback="Execute nothing.">
-                        <DecryptedText text="Execute nothing." animateOn="hover" speed={46} />
-                      </Suspense>
-                    ) : (
-                      'Execute nothing.'
-                    )}
+                    <SmartText text="Execute nothing." priority="heading" animateOn="hover" speed={46} active={mountHeavy3D} />
                   </span>
                 </h1>
 
                 <p className="hero-intro">
-                  1,142+ rules, 11-language AST call graphs, live URL auditor with auto-fix configs,
-                  and MCP server.
+                  <SmartText
+                    text="1,142+ rules, 11-language AST call graphs, live URL auditor with auto-fix configs, and MCP server."
+                    priority="body"
+                    active={mountHeavy3D}
+                  />
                 </p>
 
                 <div className="hero-actions">
                   <a className="button button-primary" href="#quickstart">
-                    Quickstart <ArrowDown size={15} aria-hidden="true" />
+                    <SmartText text="Quickstart" priority="accent" scrambleColor="#050505" active={mountHeavy3D} />{' '}
+                    <ArrowDown size={15} aria-hidden="true" />
                   </a>
                   <button
                     type="button"
                     className="osien-editorial-link osien-link-btn"
                     onClick={openDocs}
                   >
-                    Read Docs <ArrowRight size={14} aria-hidden="true" />
+                    <SmartText text="Read Docs" priority="accent" active={mountHeavy3D} />{' '}
+                    <ArrowRight size={14} aria-hidden="true" />
                   </button>
                 </div>
               </div>
@@ -566,10 +560,10 @@ export default function App() {
                   Signal only
                 </p>
                 <h2>
-                  {mountHeavy3D ? (<Suspense fallback="Built for precision."><DecryptedText animateOn="inViewHover" text="Built for precision." speed={42} /></Suspense>) : 'Built for precision.'}
+                  <SmartText text="Built for precision." priority="heading" animateOn="inViewHover" speed={42} active={mountHeavy3D} />
                   <br />
                   <em>
-                    {mountHeavy3D ? (<Suspense fallback="Honest about limits."><DecryptedText animateOn="inViewHover" text="Honest about limits." speed={45} /></Suspense>) : 'Honest about limits.'}
+                    <SmartText text="Honest about limits." priority="heading" animateOn="inViewHover" speed={45} active={mountHeavy3D} />
                   </em>
                 </h2>
               </motion.div>
@@ -583,11 +577,10 @@ export default function App() {
                     </span>
                   </div>
                   <h3>
-                    {mountHeavy3D ? (<Suspense fallback="11-language AST"><DecryptedText animateOn="inViewHover" text="11-language AST" speed={42} /></Suspense>) : '11-language AST'}
+                    <SmartText text="11-language AST" priority="heading" animateOn="inViewHover" speed={42} active={mountHeavy3D} />
                   </h3>
                   <p>
-                    1,142+ rules &amp; AST call graphs across JS/TS, Python, Go, Rust, Java, PHP,
-                    Ruby, Kotlin, C/C++, and Swift.
+                    <SmartText text="1,142+ rules & AST call graphs across JS/TS, Python, Go, Rust, Java, PHP, Ruby, Kotlin, C/C++, and Swift." priority="body" active={mountHeavy3D} />
                   </p>
                   <div className="feature-tags">
                     <span>1,142+ Rules</span>
@@ -604,11 +597,10 @@ export default function App() {
                     </span>
                   </div>
                   <h3>
-                    {mountHeavy3D ? (<Suspense fallback="Live URL & taint"><DecryptedText animateOn="inViewHover" text="Live URL & taint" speed={42} /></Suspense>) : 'Live URL & taint'}
+                    <SmartText text="Live URL & taint" priority="heading" animateOn="inViewHover" speed={42} active={mountHeavy3D} />
                   </h3>
                   <p>
-                    Multi-page live crawl, TLS/CORS/exposed probes, and auto-generated fix configs
-                    for Vercel, Nginx, Next.js &amp; Cloudflare.
+                    <SmartText text="Multi-page live crawl, TLS/CORS/exposed probes, and auto-generated fix configs for Vercel, Nginx, Next.js & Cloudflare." priority="body" active={mountHeavy3D} />
                   </p>
                   <div className="feature-code">
                     <span>--crawl 5</span>
@@ -625,11 +617,10 @@ export default function App() {
                     </span>
                   </div>
                   <h3>
-                    {mountHeavy3D ? (<Suspense fallback="AI Triage & SARIF"><DecryptedText animateOn="inViewHover" text="AI Triage & SARIF" speed={42} /></Suspense>) : 'AI Triage & SARIF'}
+                    <SmartText text="AI Triage & SARIF" priority="heading" animateOn="inViewHover" speed={42} active={mountHeavy3D} />
                   </h3>
                   <p>
-                    Verify findings with local Ollama, Claude, OpenCode, or Pi — plus SARIF 2.1.0 CI
-                    gating.
+                    <SmartText text="Verify findings with local Ollama, Claude, OpenCode, or Pi — plus SARIF 2.1.0 CI gating." priority="body" active={mountHeavy3D} />
                   </p>
                   <div className="feature-code">
                     <span>Ollama · Claude</span>
@@ -662,10 +653,10 @@ export default function App() {
                   transition={{ duration: 0.65, ease: REVEAL_EASE }}
                 >
                   <h2>
-                    {mountHeavy3D ? (<Suspense fallback="One engine."><DecryptedText animateOn="inViewHover" text="One engine." speed={42} /></Suspense>) : 'One engine.'}
+                    <SmartText text="One engine." priority="heading" animateOn="inViewHover" speed={42} active={mountHeavy3D} />
                     <br />
                     <em>
-                      {mountHeavy3D ? (<Suspense fallback="Three surfaces."><DecryptedText animateOn="inViewHover" text="Three surfaces." speed={45} /></Suspense>) : 'Three surfaces.'}
+                      <SmartText text="Three surfaces." priority="heading" animateOn="inViewHover" speed={45} active={mountHeavy3D} />
                     </em>
                   </h2>
 
@@ -674,11 +665,10 @@ export default function App() {
                       <span className="step-number">01</span>
                       <div>
                         <h3>
-                          {mountHeavy3D ? (<Suspense fallback="Desktop App"><DecryptedText animateOn="inViewHover" text="Desktop App" speed={42} /></Suspense>) : 'Desktop App'}
+                          <SmartText text="Desktop App" priority="heading" animateOn="inViewHover" speed={42} active={mountHeavy3D} />
                         </h3>
                         <p>
-                          Drag-drop folders, Git URLs, or deep Live URL audits with Save Config &amp;
-                          native NSIS installer.
+                          <SmartText text="Drag-drop folders, Git URLs, or deep Live URL audits with Save Config & native NSIS installer." priority="body" active={mountHeavy3D} />
                         </p>
                       </div>
                     </li>
@@ -686,7 +676,7 @@ export default function App() {
                       <span className="step-number">02</span>
                       <div>
                         <h3>
-                          {mountHeavy3D ? (<Suspense fallback="CLI & CI Gate"><DecryptedText animateOn="inViewHover" text="CLI & CI Gate" speed={42} /></Suspense>) : 'CLI & CI Gate'}
+                          <SmartText text="CLI & CI Gate" priority="heading" animateOn="inViewHover" speed={42} active={mountHeavy3D} />
                         </h3>
                         <p>
                           <code>probe scan https://site.com --crawl 5 --probe-cors --fix vercel</code>
@@ -697,10 +687,10 @@ export default function App() {
                       <span className="step-number">03</span>
                       <div>
                         <h3>
-                          {mountHeavy3D ? (<Suspense fallback="Stdio MCP"><DecryptedText animateOn="inViewHover" text="Stdio MCP" speed={42} /></Suspense>) : 'Stdio MCP'}
+                          <SmartText text="Stdio MCP" priority="heading" animateOn="inViewHover" speed={42} active={mountHeavy3D} />
                         </h3>
                         <p>
-                          Zero-dependency tool server for AI coding agents.
+                          <SmartText text="Zero-dependency tool server for AI coding agents." priority="body" active={mountHeavy3D} />
                         </p>
                       </div>
                     </li>
@@ -729,15 +719,15 @@ export default function App() {
                   </span>
 
                   <h2>
-                    {mountHeavy3D ? (<Suspense fallback="Clone."><DecryptedText animateOn="inViewHover" text="Clone." speed={45} /></Suspense>) : 'Clone.'}
+                    <SmartText text="Clone." priority="heading" animateOn="inViewHover" speed={45} active={mountHeavy3D} />
                     <br />
                     <em>
-                      {mountHeavy3D ? (<Suspense fallback="Scan."><DecryptedText animateOn="inViewHover" text="Scan." speed={45} /></Suspense>) : 'Scan.'}
+                      <SmartText text="Scan." priority="heading" animateOn="inViewHover" speed={45} active={mountHeavy3D} />
                     </em>
                   </h2>
 
                   <p>
-                    Same deterministic engine across desktop, CLI, and MCP.
+                    <SmartText text="Same deterministic engine across desktop, CLI, and MCP." priority="body" active={mountHeavy3D} />
                   </p>
 
                   <button

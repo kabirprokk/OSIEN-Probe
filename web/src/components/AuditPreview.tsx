@@ -2,6 +2,7 @@ import { useState } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
 import { AnimatePresence, motion } from 'motion/react';
 import { ShieldAlert, FileCode2, Cpu, CheckCircle2 } from 'lucide-react';
+import { SmartText } from './SmartText';
 
 type CategoryKey = 'website' | 'live' | 'api' | 'software';
 
@@ -320,7 +321,9 @@ export function AuditPreview() {
                       {finding.file}:{finding.line}
                     </span>
                   </div>
-                  <p className="finding-title">{finding.title}</p>
+                  <p className="finding-title">
+                    <SmartText text={finding.title} priority="accent" />
+                  </p>
                 </button>
               );
             })}
@@ -366,11 +369,15 @@ export function AuditPreview() {
                 <div className="inspector-meta-grid">
                   <div className="inspector-block">
                     <span className="inspector-label">TRACE</span>
-                    <p className="inspector-mono">{selectedFinding.trace}</p>
+                    <p className="inspector-mono">
+                      <SmartText text={selectedFinding.trace} priority="body" />
+                    </p>
                   </div>
                   <div className="inspector-block">
                     <span className="inspector-label">FIX</span>
-                    <p>{selectedFinding.fix}</p>
+                    <p>
+                      <SmartText text={selectedFinding.fix} priority="body" />
+                    </p>
                   </div>
                 </div>
               </motion.div>
