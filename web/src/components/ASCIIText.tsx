@@ -572,8 +572,8 @@ export default function ASCIIText({
         fonts.load(`${fontWeight} ${TEXT_PX}px ${fontFamily}`, text || 'A'),
         fonts.load(`500 ${GLYPH_HEIGHT}px ${fontFamily}`, glyphs)
       ])
-        .catch(() => null)
-        .then(run);
+        .then(run)
+        .catch(() => null);
     }
     fonts?.addEventListener?.('loadingdone', run);
     return () => {

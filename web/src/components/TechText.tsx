@@ -283,7 +283,7 @@ const TechText = ({
       const wanted = fontFor(s, 64);
       if (document.fonts && wanted !== requestedFont) {
         requestedFont = wanted;
-        document.fonts.load(wanted, s.text).then(refreshFonts, refreshFonts);
+        document.fonts.load(wanted, s.text).then(refreshFonts).catch(refreshFonts);
       }
 
       const probe = scratchCtx;
@@ -906,10 +906,13 @@ const TechText = ({
       ctx.globalAlpha = 1;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       for (const glyph of glyphs) {
-        const moved = Math.hypot(glyph.offset.x, glyph.offset.y);
+        const offset = glyph?.offset;
+        const dashes = glyph?.dashes;
+        if (!offset || !dashes) continue;
+        const moved = Math.hypot(offset.x, offset.y);
         if (moved > 1) {
           ctx.globalAlpha = Math.min(1, moved / 24) * 0.55;
-          blit(ctx, glyph.dashes, 0, 0, 0, 0);
+          blit(ctx, dashes, 0, 0, 0, 0);
           ctx.globalAlpha = 1;
         }
       }
@@ -1047,7 +1050,7 @@ const TechText = ({
     }
     const schemeQuery = window.matchMedia?.('(prefers-color-scheme: dark)');
     schemeQuery?.addEventListener?.('change', wake);
-    if (document.fonts) document.fonts.ready.then(fontsLoaded, fontsLoaded);
+    if (document.fonts) document.fonts.ready.then(fontsLoaded).catch(fontsLoaded);
 
     resize();
 

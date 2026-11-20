@@ -73,7 +73,7 @@ html.has-diamond-cursor button,
 html.has-diamond-cursor [role='tab'],
 html.has-diamond-cursor [role='option'],
 html.has-diamond-cursor .osien-wave-scroll {
-  cursor: none !important;
+  cursor: none;
 }
 
 .diamond-cursor-core,
@@ -706,8 +706,8 @@ main,
   color: var(--ink);
 }
 
-.metric-score {
-  color: var(--accent) !important;
+.audit-metric strong.metric-score {
+  color: var(--accent);
 }
 
 .metric-score small {
@@ -885,7 +885,6 @@ main,
   min-width: 28px;
   margin-right: 12px;
   color: var(--quiet);
-  user-select: none;
 }
 
 .inspector-meta-grid {
@@ -916,9 +915,9 @@ main,
   color: var(--ink-dim);
 }
 
-.inspector-mono {
-  font-size: 11px !important;
-  color: var(--accent) !important;
+.inspector-block p.inspector-mono {
+  font-size: 11px;
+  color: var(--accent);
 }
 
 .inspector-ai {

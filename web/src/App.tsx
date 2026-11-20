@@ -26,9 +26,10 @@ import { BlackHoleTransition } from './components/BlackHoleTransition';
 import TechText from './components/TechText';
 import DecryptedText from './components/DecryptedText';
 
-const DocsPage = lazy(() =>
-  import('./components/DocsPage').then((m) => ({ default: m.DocsPage })),
-);
+const DocsPage = lazy(async () => {
+  const m = await import('./components/DocsPage');
+  return { default: m.DocsPage };
+});
 const ASCIIText = lazy(() => import('./components/ASCIIText'));
 
 type QuickstartTab = 'cli' | 'desktop' | 'mcp';
@@ -90,9 +91,13 @@ export default function App() {
 
   useEffect(() => {
     let alive = true;
-    document.fonts.ready.then(() => {
-      if (alive) setFontsReady(true);
-    });
+    document.fonts.ready
+      .then(() => {
+        if (alive) setFontsReady(true);
+      })
+      .catch(() => {
+        if (alive) setFontsReady(true);
+      });
     // Safety fallback in case fonts or WebGL stall on restricted devices
     const safety = window.setTimeout(() => {
       if (alive) {
