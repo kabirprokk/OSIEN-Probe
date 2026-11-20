@@ -17,7 +17,7 @@ const {
   SEVERITIES = ['critical', 'high', 'medium', 'low', 'info'],
 } = require('../electron/scanner.cjs');
 const { checkAiHealth } = require('../electron/ai-review.cjs');
-const { scanLiveUrl } = require('../electron/web-auditor.cjs');
+const { scanLiveUrl, generateWebRemediation } = require('../electron/web-auditor.cjs');
 
 const C = {
   reset: '\x1b[0m',
@@ -57,6 +57,8 @@ Options:
   --markdown, --md        Output Markdown report
   --out, -o <file>        Write output report to a file
   --fail-on <severity>    Exit 1 if any finding is at or above (critical|high|medium|low|info)
+  --fix [platform]        Generate live website fix config (nginx|apache|express|nextjs|vercel|cloudflare|all)
+  --probe-exposed         Check for exposed /.git/HEAD and /.env on live URLs
   --quiet, -q             Only print summary counts (no per-finding lines)
   --help, -h              Show this help
   --version, -v           Print version`);
@@ -71,6 +73,8 @@ function parseArgs(argv) {
     format: 'text',
     out: null,
     failOn: null,
+    fix: null,
+    probeExposed: false,
     quiet: false,
     help: false,
     version: false,
@@ -81,6 +85,16 @@ function parseArgs(argv) {
     if (arg === '--help' || arg === '-h') opts.help = true;
     else if (arg === '--version' || arg === '-v') opts.version = true;
     else if (arg === '--bugs-only') opts.bugsOnly = true;
+    else if (arg === '--probe-exposed') opts.probeExposed = true;
+    else if (arg === '--fix' || arg === '--remediate') {
+      const next = argv[i + 1];
+      if (next && !next.startsWith('-') && ['nginx', 'apache', 'express', 'nextjs', 'vercel', 'cloudflare', 'all'].includes(next)) {
+        opts.fix = next;
+        i++;
+      } else {
+        opts.fix = 'all';
+      }
+    }
     else if (arg === '--json') opts.format = 'json';
     else if (arg === '--sarif') opts.format = 'sarif';
     else if (arg === '--markdown' || arg === '--md') opts.format = 'markdown';
@@ -300,8 +314,11 @@ async function run() {
   const isLiveUrl = /^https?:\/\//i.test(opts.target);
   const root = isLiveUrl ? opts.target : path.resolve(opts.target);
   const result = isLiveUrl
-    ? await scanLiveUrl(root, { bugsOnly: opts.bugsOnly })
+    ? await scanLiveUrl(root, { bugsOnly: opts.bugsOnly, probeExposedFiles: opts.probeExposed })
     : await scanProjectRoot(root, opts.kind, { bugsOnly: opts.bugsOnly });
+  if (isLiveUrl && opts.fix) {
+    result.remediation = generateWebRemediation(result, root);
+  }
   const filesScanned = result.filesScanned ?? result.scannedFiles ?? 0;
   const rulesEvaluated = result.rulesEvaluated ?? result.totalChecks ?? 0;
   const projectMeta = { name: isLiveUrl ? new URL(root).hostname : path.basename(root), root, kind: result.kind || opts.kind };
@@ -333,6 +350,14 @@ async function run() {
         if (f.cwe || f.hint) lines.push(`    ${f.cwe ? `${f.cwe}: ` : ''}${f.hint || ''}`);
         if (f.reason) lines.push(`    Why: ${f.reason}`);
         if (f.excerpt) lines.push(`    ${f.excerpt}`);
+      }
+    }
+    if (isLiveUrl && opts.fix && result.remediation) {
+      const platforms = opts.fix === 'all' ? Object.keys(result.remediation.configs) : [opts.fix];
+      for (const p of platforms) {
+        if (result.remediation.configs[p]) {
+          lines.push('', `--- Fix Config (${p}) ---`, result.remediation.configs[p]);
+        }
       }
     }
     output = lines.join('\n');

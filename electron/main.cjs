@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, dialog, ipcMain, shell, session, Menu } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { execFile } = require('node:child_process');
@@ -8,9 +8,11 @@ const execFileAsync = promisify(execFile);
 // ipcMain is undefined when this file is required by the test runner.
 const ipc = typeof ipcMain?.handle === 'function' ? ipcMain.handle.bind(ipcMain) : () => {};
 const { scanProjectRoot, toSarifReport, toMarkdownReport, kinds } = require('./scanner.cjs');
+const { scanLiveUrl, generateWebRemediation } = require('./web-auditor.cjs');
 const { shared, categoryRules } = require('./rules.cjs');
 const { verifyFinding, reviewFindings, getSourceContext, checkAiHealth, generateFindingFix, generateFileBatchFixes, applyFindingFix, MODEL } = require('./ai-review.cjs');
 const { getCodexAuthStatus, getAvailableCodexModels, connectCodexBrowser, disconnectCodex } = require('./codex-auth.cjs');
+const { isCloudProvider, getProviderAuthStatus, getAvailableProviderModels, connectProvider, disconnectProvider } = require('./agent-providers.cjs');
 const { getSystemProfile, runExtremeTest, stopExtremeTest } = require('./extreme-tester.cjs');
 const isInside = (root, target) => { const rel = path.relative(root, target); return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel)); };
 const statePath = () => path.join(app.getPath('userData'), 'deepcheck-projects.json');
@@ -18,9 +20,10 @@ const aiConfigPath = () => path.join(app.getPath('userData'), 'osien-ai-config.j
 async function readAiConfig() {
   try {
     const raw = JSON.parse(await fs.readFile(aiConfigPath(), 'utf8'));
+    const provider = isCloudProvider(raw.provider) ? raw.provider : 'local';
     return {
-      provider: raw.provider === 'cloud-codex' ? 'cloud-codex' : 'local',
-      model: String(raw.model || (raw.provider === 'cloud-codex' ? 'default' : MODEL)),
+      provider,
+      model: String(raw.model || (isCloudProvider(provider) ? 'default' : MODEL)),
       apiKey: String(raw.apiKey || ''),
     };
   } catch {
@@ -32,24 +35,48 @@ async function saveAiConfig(cfg) {
   await fs.writeFile(aiConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
 }
 async function publicAiConfig(cfg) {
-  const [codexAuth, codexModels, localHealth] = await Promise.all([
+  const [codexAuth, codexModels, claudeAuth, claudeModels, opencodeAuth, opencodeModels, piAuth, piModels, localHealth] = await Promise.all([
     getCodexAuthStatus(),
     getAvailableCodexModels(),
+    getProviderAuthStatus('cloud-claude'),
+    getAvailableProviderModels('cloud-claude'),
+    getProviderAuthStatus('cloud-opencode'),
+    getAvailableProviderModels('cloud-opencode'),
+    getProviderAuthStatus('cloud-pi'),
+    getAvailableProviderModels('cloud-pi'),
     checkAiHealth({ provider: 'local', model: cfg.model }),
   ]);
   const localModels = localHealth.models || [];
-  const effectiveModel = cfg.provider === 'cloud-codex'
-    ? (codexModels.includes(cfg.model) ? cfg.model : codexModels[0])
-    : (localModels.includes(cfg.model) ? cfg.model : (localModels[0] || cfg.model));
+  const modelsByProvider = {
+    'cloud-codex': codexModels,
+    'cloud-claude': claudeModels,
+    'cloud-opencode': opencodeModels,
+    'cloud-pi': piModels,
+  };
+  const connectedByProvider = {
+    'cloud-codex': codexAuth.connected,
+    'cloud-claude': claudeAuth.connected,
+    'cloud-opencode': opencodeAuth.connected,
+    'cloud-pi': piAuth.connected,
+  };
+  const activeList = isCloudProvider(cfg.provider) ? (modelsByProvider[cfg.provider] || codexModels) : localModels;
+  const effectiveModel = activeList.includes(cfg.model) ? cfg.model : (activeList[0] || cfg.model);
   return {
     provider: cfg.provider,
     model: effectiveModel,
     codexConnected: codexAuth.connected,
+    claudeConnected: claudeAuth.connected,
+    opencodeConnected: opencodeAuth.connected,
+    piConnected: piAuth.connected,
+    connectedByProvider,
     hasApiKey: Boolean(cfg.apiKey),
     apiKeyMasked: cfg.apiKey ? `${cfg.apiKey.slice(0, 5)}…${cfg.apiKey.slice(-4)}` : '',
     localModels,
     localAvailable: localHealth.available,
     codexModels,
+    claudeModels,
+    opencodeModels,
+    piModels,
   };
 }
 async function readProjects() { try { return JSON.parse(await fs.readFile(statePath(), 'utf8')); } catch { return []; } }
@@ -78,6 +105,23 @@ if (process.versions.electron && typeof ipcMain?.handle === 'function') {
 ipc('pick-folder', async () => { const result = await dialog.showOpenDialog({ properties: ['openDirectory'] }); return result.canceled ? null : result.filePaths[0]; });
 ipc('list-projects', readProjects);
 async function persistProject(rootPath, kind, displayName) {
+  if (typeof rootPath === 'string' && /^https?:\/\//i.test(rootPath.trim())) {
+    const parsed = new URL(rootPath.trim());
+    const normalized = parsed.toString();
+    const projects = await readProjects();
+    if (projects.some(p => p.root.toLowerCase() === normalized.toLowerCase())) throw new Error('This URL is already connected');
+    const project = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: displayName || parsed.hostname,
+      root: normalized,
+      kind: 'Website',
+      isLiveUrl: true,
+      addedAt: new Date().toISOString(),
+      latestRun: null,
+      scanHistory: [],
+    };
+    projects.unshift(project); await saveProjects(projects); return project;
+  }
   if (!kinds.includes(kind)) throw new Error('Choose a project category');
   const root = path.resolve(rootPath); const stat = await fs.stat(root).catch(() => null);
   if (!stat?.isDirectory()) throw new Error('The selected folder no longer exists');
@@ -87,8 +131,10 @@ async function persistProject(rootPath, kind, displayName) {
   projects.unshift(project); await saveProjects(projects); return project;
 }
 ipc('add-project', async (_event, payload) => {
-  if (!payload || !kinds.includes(payload.kind) || typeof payload.root !== 'string') throw new Error('Choose a folder and project category');
-  return persistProject(payload.root, payload.kind);
+  if (!payload || typeof payload.root !== 'string') throw new Error('Choose a folder or URL and project category');
+  const isUrl = /^https?:\/\//i.test(payload.root.trim());
+  if (!isUrl && !kinds.includes(payload.kind)) throw new Error('Choose a folder and project category');
+  return persistProject(payload.root, payload.kind || 'Website');
 });
 async function ensureGit() {
   const hasGit = () => execFileAsync('git', ['--version'], { windowsHide: true }).then(() => true).catch(() => false);
@@ -116,7 +162,17 @@ ipc('clone-repo', async (_event, payload) => {
 });
 ipc('remove-project', async (_event, id) => { const projects = await readProjects(); const index = projects.findIndex(p => p.id === id); if (index < 0) throw new Error('Project not found'); const [removed] = projects.splice(index, 1); await saveProjects(projects); return removed; });
 ipc('open-data-folder', async () => { const error = await shell.openPath(app.getPath('userData')); if (error) throw new Error(error); return true; });
-ipc('open-project', async (_event, id) => { const p = (await readProjects()).find(item => item.id === id); if (!p) throw new Error('Project not found'); const error = await shell.openPath(p.root); if (error) throw new Error(error); return true; });
+ipc('open-project', async (_event, id) => {
+  const p = (await readProjects()).find(item => item.id === id);
+  if (!p) throw new Error('Project not found');
+  if (p.isLiveUrl || /^https?:\/\//i.test(p.root)) {
+    await shell.openExternal(p.root);
+    return true;
+  }
+  const error = await shell.openPath(p.root);
+  if (error) throw new Error(error);
+  return true;
+});
 ipc('scan-project', async (_event, id) => {
   const projects = await readProjects(); const project = projects.find(p => p.id === id); if (!project) throw new Error('Project not found');
   const priorFindingIds = new Set((project.latestRun?.findings || []).map((f) => f.id));
@@ -128,7 +184,27 @@ ipc('scan-project', async (_event, id) => {
     for (const finding of project.latestRun.findings || []) { delete finding.aiAssessment; delete finding.aiReviewError; }
     await saveProjects(projects);
   }
-  const result = await scanProjectRoot(project.root, project.kind, { bugsOnly: true });
+  const isLive = Boolean(project.isLiveUrl || /^https?:\/\//i.test(project.root));
+  let result;
+  if (isLive) {
+    const webRes = await scanLiveUrl(project.root, { bugsOnly: true });
+    result = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      root: webRes.root,
+      kind: 'Website',
+      filesScanned: webRes.scannedFiles,
+      rulesEvaluated: webRes.totalRules,
+      totalChecks: webRes.totalChecks,
+      durationMs: webRes.durationMs,
+      score: webRes.score,
+      severityCounts: webRes.severityCounts,
+      findings: webRes.findings,
+      truncated: webRes.truncated,
+      completedAt: webRes.scannedAt,
+    };
+  } else {
+    result = await scanProjectRoot(project.root, project.kind, { bugsOnly: true });
+  }
   result.projectId = project.id;
   if (priorScore !== null) {
     result.scoreDelta = result.score - priorScore;
@@ -148,9 +224,15 @@ ipc('scan-project', async (_event, id) => {
   });
   project.scanHistory = history.slice(0, 10);
   project.latestRun = result; await saveProjects(projects);
-  // Return static results immediately; AI review runs in the background so the UI never blocks.
-  startBackgroundReview(project.id, project.root, result);
+  // Return static results immediately; AI review runs in the background for local projects.
+  if (!isLive) startBackgroundReview(project.id, project.root, result);
   return result;
+});
+ipc('generate-web-remediation', async (_event, id) => {
+  const projects = await readProjects();
+  const project = projects.find((p) => p.id === id);
+  if (!project) throw new Error('Project not found');
+  return generateWebRemediation(project.latestRun || { root: project.root, findings: [] }, project.root);
 });
 // ---- Background AI review -------------------------------------------------
 // Only security-relevant findings are reviewed automatically (local CPU models
@@ -257,11 +339,25 @@ ipc('disconnect-codex', async () => {
   const current = await readAiConfig();
   return { config: await publicAiConfig(current), health: await checkAiHealth(current) };
 });
+ipc('connect-provider', async (_event, providerId) => {
+  const provider = isCloudProvider(providerId) ? providerId : 'cloud-codex';
+  await connectProvider(provider);
+  const [current, models] = await Promise.all([readAiConfig(), getAvailableProviderModels(provider)]);
+  const next = { provider, model: models.includes(current.model) ? current.model : models[0], apiKey: current.apiKey };
+  await saveAiConfig(next);
+  return { config: await publicAiConfig(next), health: await checkAiHealth(next) };
+});
+ipc('disconnect-provider', async (_event, providerId) => {
+  const provider = isCloudProvider(providerId) ? providerId : 'cloud-codex';
+  await disconnectProvider(provider);
+  const current = await readAiConfig();
+  return { config: await publicAiConfig(current), health: await checkAiHealth(current) };
+});
 ipc('save-ai-config', async (_event, payload) => {
   const current = await readAiConfig();
-  const provider = payload?.provider === 'cloud-codex' ? 'cloud-codex' : 'local';
-  const codexModels = provider === 'cloud-codex' ? await getAvailableCodexModels() : [];
-  const defaultModel = provider === 'cloud-codex' ? codexModels[0] : MODEL;
+  const provider = isCloudProvider(payload?.provider) ? payload.provider : 'local';
+  const cloudModels = isCloudProvider(provider) ? await getAvailableProviderModels(provider) : [];
+  const defaultModel = isCloudProvider(provider) ? cloudModels[0] : MODEL;
   const model = String(payload?.model || defaultModel).trim();
   const nextKey = typeof payload?.apiKey === 'string' && payload.apiKey.trim()
     ? payload.apiKey.trim()
@@ -297,8 +393,8 @@ ipc('apply-finding-fix', async (_event, payload) => {
 ipc('fix-all-findings', async (_event, payload) => {
   const { projectId } = payload || {};
   const aiCfg = await readAiConfig();
-  if (aiCfg.provider !== 'cloud-codex') {
-    throw new Error('Switch to Cloud (Codex) in Settings to use Fix all with AI.');
+  if (!isCloudProvider(aiCfg.provider)) {
+    throw new Error('Switch to a Cloud AI provider (Claude, Codex, OpenCode, or Pi) in Settings to use Fix all with AI.');
   }
   const projects = await readProjects();
   const project = projects.find((item) => item.id === projectId);
@@ -382,21 +478,9 @@ ipc('fix-all-findings', async (_event, payload) => {
   return { total: queue.length, fixed, failed };
 });
 ipc('get-system-profile', async () => getSystemProfile());
-ipc('start-extreme-test', async (_event, projectId) => {
-  const projects = await readProjects();
-  const project = projects.find((item) => item.id === projectId);
-  if (!project) throw new Error('Project not found');
-  if (project.kind !== 'Website') throw new Error('Extreme Live Sandbox Test is currently available for Website projects.');
-  return runExtremeTest({
-    project,
-    BrowserWindow,
-    session,
-    onEvent: (payload) => {
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (!win.isDestroyed()) win.webContents.send('extreme-test-event', payload);
-      }
-    },
-  });
+ipc('start-extreme-test', async () => {
+  void runExtremeTest;
+  throw new Error('Extreme Live Sandbox Test is currently under development and locked.');
 });
 ipc('stop-extreme-test', async (_event, projectId) => stopExtremeTest(projectId));
 ipc('list-rules', async () => {

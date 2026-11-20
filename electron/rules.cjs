@@ -2516,8 +2516,9 @@ const categoryRules = {
 
 const { extraShared, extraCategoryRules } = require('./rules-expanded.cjs');
 const { megaShared } = require('./rules-mega.cjs');
+const { ultraShared } = require('./rules-ultra.cjs');
 
-shared.push(...extraShared, ...megaShared);
+shared.push(...extraShared, ...megaShared, ...ultraShared);
 for (const [kind, list] of Object.entries(extraCategoryRules)) {
   if (!categoryRules[kind]) categoryRules[kind] = [];
   categoryRules[kind].push(...list);

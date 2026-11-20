@@ -338,3 +338,183 @@ test('Live Web Auditor checks HTTP headers, cookies, and HTML without data-id or
     await new Promise((resolve) => srv.close(resolve));
   }
 });
+
+test('AST-aware rules eliminate false positives on __proto__ guards and standard window/comparison usage', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-ast-noise-'));
+  await fs.writeFile(path.join(dir, 'safe.js'), [
+    'export function mergeSafe(target, src) {',
+    '  for (const key in src) {',
+    '    if (key === "__proto__" || key === "constructor") continue;',
+    '    if (Object.hasOwn(src, key)) target[key] = src[key];',
+    '  }',
+    '  if (window.myFlag === true) window.location = "/home";',
+    '  window.onload = () => {};',
+    '  window.myTemp = undefined;',
+    '}',
+  ].join('\n'));
+  await fs.writeFile(path.join(dir, 'unsafe.js'), [
+    'export function bad(target, helper) {',
+    '  target.__proto__.admin = true;',
+    '  window.myLibHelper = helper;',
+    '}',
+  ].join('\n'));
+
+  const report = await scanProjectRoot(dir, 'Library', { bugsOnly: true });
+  const safeFindings = report.findings.filter((f) => f.file === 'safe.js');
+  assert.ok(!safeFindings.some((f) => f.ruleId === 'js-prototype-pollution'), 'ignores defensive __proto__ guards');
+  assert.ok(!safeFindings.some((f) => f.ruleId === 'lib-global-window-mutation'), 'ignores window comparisons, standard DOM props, and undefined cleanup');
+
+  const unsafeFindings = report.findings.filter((f) => f.file === 'unsafe.js');
+  assert.ok(unsafeFindings.some((f) => f.ruleId === 'js-prototype-pollution'), 'still catches actual __proto__ mutation');
+  assert.ok(unsafeFindings.some((f) => f.ruleId === 'lib-global-window-mutation'), 'still catches custom window.* global mutation');
+});
+
+test('AST-backed interprocedural call graph traces multi-hop taint across Python, Go, and Rust files', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-polyglot-cg-'));
+  // Python 2-hop: handler.py -> mid.py -> sink.py
+  await fs.writeFile(path.join(dir, 'sink.py'), [
+    'def run_query(sql_part):',
+    '    cursor.execute("SELECT * FROM t WHERE name = " + sql_part)',
+  ].join('\n'));
+  await fs.writeFile(path.join(dir, 'mid.py'), [
+    'def forward_query(val):',
+    '    q = val',
+    '    return run_query(q)',
+  ].join('\n'));
+  await fs.writeFile(path.join(dir, 'handler.py'), [
+    'def endpoint():',
+    '    name = request.args.get("name")',
+    '    forward_query(name)',
+  ].join('\n'));
+
+  // Go 2-hop: handler.go -> mid.go -> sink.go
+  await fs.writeFile(path.join(dir, 'sink.go'), [
+    'package main',
+    'func ExecRaw(q string) {',
+    '    db.Exec("SELECT * FROM users WHERE id = " + q)',
+    '}',
+  ].join('\n'));
+  await fs.writeFile(path.join(dir, 'mid.go'), [
+    'package main',
+    'func ForwardUser(u string) {',
+    '    ExecRaw(u)',
+    '}',
+  ].join('\n'));
+  await fs.writeFile(path.join(dir, 'handler.go'), [
+    'package main',
+    'func UserHandler(w http.ResponseWriter, r *http.Request) {',
+    '    id := r.URL.Query().Get("id")',
+    '    ForwardUser(id)',
+    '}',
+  ].join('\n'));
+
+  // Rust cross-file: handler.rs -> db.rs
+  await fs.writeFile(path.join(dir, 'db.rs'), [
+    'pub fn query_user(name: &str) {',
+    '    let q = sqlx::query(&format!("SELECT * FROM users WHERE name = {}", name));',
+    '}',
+  ].join('\n'));
+  await fs.writeFile(path.join(dir, 'handler.rs'), [
+    'pub fn handle(req: web::Query<Params>) {',
+    '    let name = req.query_string();',
+    '    query_user(name);',
+    '}',
+  ].join('\n'));
+
+  const report = await scanProjectRoot(dir, 'API / backend', { bugsOnly: true });
+  const ids = new Set(report.findings.map((f) => f.ruleId));
+  assert.ok(ids.has('py-crossfile-taint'), 'detects 2-hop Python interprocedural call-graph taint');
+  assert.ok(ids.has('go-crossfile-taint'), 'detects 2-hop Go interprocedural call-graph taint');
+  assert.ok(ids.has('rust-crossfile-taint'), 'detects Rust interprocedural call-graph taint');
+});
+
+test('Expanded Web Auditor detects CORS misconfigurations, Server version, and exposed .git/HEAD & .env', async () => {
+  const http = require('node:http');
+  const { scanLiveUrl, analyzeHttpHeaders } = require('../electron/web-auditor.cjs');
+
+  // Unit test analyzeHttpHeaders for HTTPS weak HSTS & CORS
+  const hdrs = new Headers({
+    'strict-transport-security': 'max-age=60',
+    'server': 'nginx/1.18.0',
+    'access-control-allow-origin': '*',
+    'access-control-allow-credentials': 'true',
+  });
+  const hFindings = analyzeHttpHeaders('https://example.test/', hdrs);
+  const hIds = new Set(hFindings.map((f) => f.ruleId));
+  assert.ok(hIds.has('web-weak-hsts'), 'detects weak HSTS max-age');
+  assert.ok(hIds.has('web-server-header-version'), 'detects Server header version leak');
+  assert.ok(hIds.has('web-cors-wildcard-credentials'), 'detects CORS * with credentials');
+
+  const srv = http.createServer((req, res) => {
+    if (req.url === '/.git/HEAD') {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('ref: refs/heads/main\n');
+      return;
+    }
+    if (req.url === '/.env') {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('APP_KEY=example_placeholder_value\n');
+      return;
+    }
+    res.writeHead(200, {
+      'content-type': 'text/html',
+      'access-control-allow-origin': 'null',
+    });
+    res.end('<!doctype html><html><body>OK</body></html>');
+  });
+
+  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  try {
+    const { port } = srv.address();
+    const report = await scanLiveUrl(`http://127.0.0.1:${port}/`, { bugsOnly: true, probeExposedFiles: true });
+    const ids = new Set(report.findings.map((f) => f.ruleId));
+    assert.ok(ids.has('web-cors-null-origin'), 'detects CORS null origin');
+    assert.ok(ids.has('web-exposed-git-head'), 'detects exposed /.git/HEAD');
+    assert.ok(ids.has('web-exposed-env-file'), 'detects exposed /.env');
+  } finally {
+    await new Promise((resolve) => srv.close(resolve));
+  }
+});
+
+test('Live Website Fix Generator (generateWebRemediation) and SRI / HttpOnly checks', async () => {
+  const http = require('node:http');
+  const { scanLiveUrl, generateWebRemediation } = require('../electron/web-auditor.cjs');
+  const html = [
+    '<!doctype html><html><head>',
+    '<script src="https://cdn.example.net/lib.js"></script>',
+    '</head><body>Hello</body></html>',
+  ].join('\n');
+
+  const srv = http.createServer((_req, res) => {
+    res.writeHead(200, {
+      'content-type': 'text/html',
+      'x-powered-by': 'Express',
+      'set-cookie': 'session_id=abc123; Path=/',
+      'access-control-allow-origin': '*',
+      'access-control-allow-credentials': 'true',
+    });
+    res.end(html);
+  });
+
+  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  try {
+    const { port } = srv.address();
+    const report = await scanLiveUrl(`http://127.0.0.1:${port}/`, { bugsOnly: true });
+    const ids = new Set(report.findings.map((f) => f.ruleId));
+    assert.ok(ids.has('web-cookie-no-httponly'), 'detects session cookie missing HttpOnly');
+    assert.ok(ids.has('web-missing-sri'), 'detects external script missing SRI');
+
+    const fixPack = generateWebRemediation(report, `https://app.example.com:${port}/`);
+    assert.equal(fixPack.url, `https://app.example.com:${port}/`);
+    assert.ok(fixPack.issueCount >= 4, 'reports multiple fixable issues');
+    assert.ok(fixPack.configs.nginx.includes('proxy_hide_header X-Powered-By;'), 'nginx config hides X-Powered-By');
+    assert.ok(fixPack.configs.nginx.includes('proxy_cookie_flags ~ secure httponly samesite=lax;'), 'nginx config hardens cookies');
+    assert.ok(fixPack.configs.apache.includes('Header unset X-Powered-By'), 'apache config unsets X-Powered-By');
+    assert.ok(fixPack.configs.express.includes("app.disable('x-powered-by')"), 'express config disables x-powered-by');
+    assert.ok(fixPack.configs.nextjs.includes('poweredByHeader: false'), 'nextjs config disables poweredByHeader');
+    assert.ok(fixPack.configs.vercel.includes('"X-Frame-Options"'), 'vercel config includes X-Frame-Options');
+    assert.ok(fixPack.configs.cloudflare.includes("headers.delete('X-Powered-By')"), 'cloudflare worker strips X-Powered-By');
+  } finally {
+    await new Promise((resolve) => srv.close(resolve));
+  }
+});

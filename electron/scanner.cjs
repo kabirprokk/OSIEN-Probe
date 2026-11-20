@@ -654,9 +654,10 @@ function scanFileContent(raw, rel, extName, lang, catalog, applicableByLang) {
   const suppressions = suppressionMap(lines);
   const taint = (lang === 'js' || lang === 'py') ? evaluateTaint(codeLines, lang) : { byLine: [] };
   const safeHtmlLines = new Set();
+  const safeRuleLines = new Map();
 
   if (lang === 'js') {
-    findings.push(...analyzeJavaScriptAst(raw, rel, applicable, taint, suppressions, makeFinding, suppressed, { safeHtmlLines }));
+    findings.push(...analyzeJavaScriptAst(raw, rel, applicable, taint, suppressions, makeFinding, suppressed, { safeHtmlLines, safeRuleLines }));
   } else if (lang === 'html' && (extName === '.html' || extName === '.htm')) {
     findings.push(...analyzeHtmlStructure(raw, rel, lines, catalog, suppressions));
   } else if (lang === 'css') {
@@ -736,6 +737,7 @@ function scanFileContent(raw, rel, extName, lang, catalog, applicableByLang) {
       if (!secretAllowed(rule, line)) continue;
       if (suppressed(suppressions, i + 1, rule.id)) continue;
       if (['js-innerhtml', 'js-outerhtml'].includes(rule.id) && safeHtmlLines.has(i + 1)) continue;
+      if (safeRuleLines.get(rule.id)?.has(i + 1)) continue;
       if (rule.id === 'js-promise-no-catch' && new RegExp('\\.then\\s*\\(').test(line)) {
         if (/^\s*(?:const|let|var|return)\b/.test(line)) continue;
         const lookahead = rawSearchLines.slice(i + 1, i + 6).join('\n');
@@ -828,7 +830,7 @@ async function scanProjectRoot(root, kind, options = {}) {
       if (raw.includes('\u0000')) return null;
       const lang = langByExt[extName] || 'generic';
       if (lang === 'js' && jsFiles.length < 400) jsFiles.push({ rel, raw, extName });
-      if ((extName === '.py' || extName === '.go') && polyglotFiles.length < 400) polyglotFiles.push({ rel, raw, extName });
+      if (['.py', '.go', '.rs'].includes(extName) && polyglotFiles.length < 400) polyglotFiles.push({ rel, raw, extName });
       return { lang, ...scanFileContent(raw, rel, extName, lang, catalog, applicableByLang) };
     }));
 

@@ -1,8 +1,8 @@
 'use strict';
 
-// Semantic security analyzers for Solidity (.sol), Python (.py), and Go (.go):
+// Semantic security analyzers for Solidity (.sol), Python (.py), Go (.go), and Rust (.rs):
 //  - Solidity Checks-Effects-Interactions (reentrancy), unprotected init/delegatecall, tx.origin, unchecked call
-//  - Python & Go AST-backed intraprocedural AND cross-file request-input taint into SQL / shell sinks
+//  - Python, Go & Rust AST-backed intraprocedural AND interprocedural call-graph taint into SQL / shell / path sinks
 
 let astGrep = null;
 function getAstGrep() {
@@ -12,6 +12,7 @@ function getAstGrep() {
     registerDynamicLanguage({
       python: require('@ast-grep/lang-python'),
       go: require('@ast-grep/lang-go'),
+      rust: require('@ast-grep/lang-rust'),
     });
     astGrep = { parse };
   } catch {
@@ -341,12 +342,298 @@ function analyzeSemanticPolyglot(raw, rel, extName) {
   return [];
 }
 
+const RS_SOURCE_RE = /\b(?:web::(?:Query|Path|Json)|Query<|Path<|Json<|req\.(?:query_string|headers|match_info)|std::env::args)/;
+const RS_SANITIZER_RE = /\b(?:\.parse::<(?:i32|i64|u32|u64|usize|bool)>|Path::new\([^)]*\)\.file_name)/;
+const RS_SINK_RE = /\b(?:sqlx::query\s*\(\s*&?format!|Command::new\s*\(\s*"(?:sh|bash)"\s*\)\s*\.arg\s*\(\s*"-c")/;
+
+const LANG_CG_SPEC = {
+  '.py': {
+    lang: 'python',
+    fnKinds: ['function_definition'],
+    assignKinds: ['assignment'],
+    callKinds: ['call'],
+    sourceRe: PY_SOURCE_RE,
+    sanitizerRe: PY_SANITIZER_RE,
+    sinkRe: PY_SINK_RE,
+    ruleId: 'py-crossfile-taint',
+    hint: (fnName, sinkMeta) => `Sanitize or parameterize input before calling "${fnName}()" (${sinkMeta.file}:${sinkMeta.line}).`,
+    title: (fnName, sinkMeta) => `Cross-file taint: request input passed to "${fnName}()" (${sinkMeta.file}:${sinkMeta.line})`,
+  },
+  '.go': {
+    lang: 'go',
+    fnKinds: ['function_declaration', 'method_declaration'],
+    assignKinds: ['short_var_declaration', 'assignment_statement'],
+    callKinds: ['call_expression'],
+    sourceRe: GO_SOURCE_RE,
+    sanitizerRe: GO_SANITIZER_RE,
+    sinkRe: /\b(?:db\.(?:Query|Exec|QueryRow)\s*\(|exec\.Command\s*\(\s*"(?:sh|bash)"\s*,\s*"-c"|os\.(?:ReadFile|Open|WriteFile|Remove)\s*\()/,
+    ruleId: 'go-crossfile-taint',
+    hint: (fnName, sinkMeta) => `Use parameterized queries or validate input before calling "${fnName}()" (${sinkMeta.file}:${sinkMeta.line}).`,
+    title: (fnName, sinkMeta) => `Cross-file taint: HTTP input passed to "${fnName}()" (${sinkMeta.file}:${sinkMeta.line})`,
+  },
+  '.rs': {
+    lang: 'rust',
+    fnKinds: ['function_item'],
+    assignKinds: ['let_declaration', 'assignment_expression'],
+    callKinds: ['call_expression', 'macro_invocation'],
+    sourceRe: RS_SOURCE_RE,
+    sanitizerRe: RS_SANITIZER_RE,
+    sinkRe: RS_SINK_RE,
+    ruleId: 'rust-crossfile-taint',
+    hint: (fnName, sinkMeta) => `Use bound parameters or avoid shell -c before calling "${fnName}()" (${sinkMeta.file}:${sinkMeta.line}).`,
+    title: (fnName, sinkMeta) => `Cross-file taint: untrusted input passed to "${fnName}()" (${sinkMeta.file}:${sinkMeta.line})`,
+  },
+};
+
+function parseFnSignature(fnText, extName) {
+  if (extName === '.py') {
+    const m = fnText.match(/^(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/);
+    if (!m) return null;
+    const params = m[2].split(',')
+      .map((p) => p.trim().split(/[:=]/)[0].trim().replace(/^\*+/, ''))
+      .filter((p) => /^[A-Za-z_]\w*$/.test(p) && p !== 'self' && p !== 'cls');
+    return { fnName: m[1], params };
+  }
+  if (extName === '.go') {
+    const m = fnText.match(/^func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*\(([^)]*)\)/);
+    if (!m) return null;
+    const params = m[2].split(',')
+      .map((p) => p.trim().split(/\s+/)[0])
+      .filter((p) => /^[A-Za-z_]\w*$/.test(p));
+    return { fnName: m[1], params };
+  }
+  if (extName === '.rs') {
+    const m = fnText.match(/^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)(?:<[^>]*>)?\s*\(([^)]*)\)/);
+    if (!m) return null;
+    const params = m[2].split(',')
+      .map((p) => p.trim().split(':')[0].trim().replace(/^mut\s+/, ''))
+      .filter((p) => /^[A-Za-z_]\w*$/.test(p) && p !== 'self');
+    return { fnName: m[1], params };
+  }
+  return null;
+}
+
+function splitCallArgs(callText) {
+  const open = callText.indexOf('(');
+  const close = callText.lastIndexOf(')');
+  if (open < 0 || close <= open) return [];
+  const inner = callText.slice(open + 1, close);
+  const args = [];
+  let depth = 0;
+  let cur = '';
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}') depth = Math.max(0, depth - 1);
+    if (ch === ',' && depth === 0) {
+      args.push(cur.trim());
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.trim()) args.push(cur.trim());
+  return args;
+}
+
+function parseAssignPair(text, extName) {
+  let clean = text.trim();
+  if (extName === '.rs') clean = clean.replace(/^let\s+(?:mut\s+)?/, '').replace(/;$/, '');
+  const sep = extName === '.go' && clean.includes(':=') ? ':=' : '=';
+  const idx = clean.indexOf(sep);
+  if (idx < 0) return null;
+  const lhs = clean.slice(0, idx).trim().split(/[\s,]+/)[0];
+  const rhs = clean.slice(idx + sep.length).trim();
+  if (!/^[A-Za-z_]\w*$/.test(lhs)) return null;
+  return { lhs, rhs };
+}
+
+function exprUsesAny(expr, varSet) {
+  for (const v of varSet) {
+    if (new RegExp(`\\b${v}\\b`).test(expr)) return true;
+  }
+  return false;
+}
+
+function buildAstCallGraph(polyglotFiles, ag) {
+  const fnNodes = [];
+  const fnByName = new Map();
+
+  for (const { rel, raw, extName } of polyglotFiles) {
+    const spec = LANG_CG_SPEC[extName];
+    if (!spec) continue;
+    let root;
+    try { root = ag.parse(spec.lang, raw).root(); } catch { continue; }
+    const lines = raw.split(/\r?\n/);
+
+    const fns = [];
+    for (const kind of spec.fnKinds) fns.push(...root.findAll({ rule: { kind } }));
+
+    for (const fn of fns) {
+      const sig = parseFnSignature(fn.text(), extName);
+      if (!sig) continue;
+      const startLine = fn.range().start.line + 1;
+
+      // Track which variables inside this function are tainted by each param index AND by external sources
+      const paramTaintedVars = sig.params.map((p) => new Set([p]));
+      const sourceTaintedVars = new Set();
+
+      const assigns = [];
+      for (const ak of spec.assignKinds) assigns.push(...fn.findAll({ rule: { kind: ak } }));
+      assigns.sort((a, b) => a.range().start.index - b.range().start.index);
+
+      for (const st of assigns) {
+        const pair = parseAssignPair(st.text(), extName);
+        if (!pair) continue;
+        if (spec.sanitizerRe.test(pair.rhs)) {
+          sourceTaintedVars.delete(pair.lhs);
+          for (const pSet of paramTaintedVars) pSet.delete(pair.lhs);
+          continue;
+        }
+        if (spec.sourceRe.test(pair.rhs) || exprUsesAny(pair.rhs, sourceTaintedVars)) {
+          sourceTaintedVars.add(pair.lhs);
+        }
+        for (let idx = 0; idx < paramTaintedVars.length; idx++) {
+          if (exprUsesAny(pair.rhs, paramTaintedVars[idx])) {
+            paramTaintedVars[idx].add(pair.lhs);
+          }
+        }
+      }
+
+      const calls = [];
+      for (const ck of spec.callKinds) calls.push(...fn.findAll({ rule: { kind: ck } }));
+      calls.sort((a, b) => a.range().start.index - b.range().start.index);
+
+      const sinkParams = new Set();
+      let directSinkLine = null;
+      const outgoingCalls = [];
+
+      for (const call of calls) {
+        const cText = call.text();
+        const cLine = call.range().start.line + 1;
+
+        if (spec.sinkRe.test(cText) && !spec.sanitizerRe.test(cText)) {
+          const isSafeGoSql = extName === '.go' && /\bdb\.(?:Query|Exec|QueryRow)\s*\(/.test(cText) && !/[+]|fmt\.Sprintf/.test(cText);
+          const isSafePySubprocess = extName === '.py' && /\bsubprocess\./.test(cText) && !/\bshell\s*=\s*True\b/.test(cText);
+          if (!isSafeGoSql && !isSafePySubprocess) {
+            for (let idx = 0; idx < paramTaintedVars.length; idx++) {
+              if (exprUsesAny(cText, paramTaintedVars[idx])) {
+                sinkParams.add(idx);
+                if (!directSinkLine) directSinkLine = cLine;
+              }
+            }
+          }
+        }
+
+        const calleeMatch = cText.match(/^(?:[A-Za-z_]\w*(?:\.|::))?([A-Za-z_]\w*)\s*\(/);
+        if (calleeMatch) {
+          const calleeName = calleeMatch[1];
+          const args = splitCallArgs(cText);
+          const argParamDeps = args.map((arg) => {
+            const deps = new Set();
+            for (let idx = 0; idx < paramTaintedVars.length; idx++) {
+              if (exprUsesAny(arg, paramTaintedVars[idx])) deps.add(idx);
+            }
+            return deps;
+          });
+          const argSourceDeps = args.map((arg) =>
+            !spec.sanitizerRe.test(arg) && (spec.sourceRe.test(arg) || exprUsesAny(arg, sourceTaintedVars)),
+          );
+          outgoingCalls.push({
+            calleeName,
+            line: cLine,
+            excerpt: lines[cLine - 1] || cText,
+            argParamDeps,
+            argSourceDeps,
+          });
+        }
+      }
+
+      const node = {
+        extName,
+        spec,
+        file: rel,
+        line: startLine,
+        fnName: sig.fnName,
+        params: sig.params,
+        sinkParams,
+        sinkMeta: sinkParams.size > 0 ? { file: rel, line: directSinkLine || startLine, fnName: sig.fnName } : null,
+        outgoingCalls,
+      };
+      fnNodes.push(node);
+      const key = `${extName}:${sig.fnName}`;
+      if (!fnByName.has(key)) fnByName.set(key, []);
+      fnByName.get(key).push(node);
+    }
+  }
+
+  // Fixed-point propagation across the interprocedural call graph (handles multi-hop chains)
+  for (let iter = 0; iter < 10; iter++) {
+    let changed = false;
+    for (const node of fnNodes) {
+      for (const call of node.outgoingCalls) {
+        const targets = fnByName.get(`${node.extName}:${call.calleeName}`) || [];
+        for (const target of targets) {
+          if (target === node || target.sinkParams.size === 0) continue;
+          for (const sinkIdx of target.sinkParams) {
+            const callerParamDeps = call.argParamDeps[sinkIdx];
+            if (!callerParamDeps) continue;
+            for (const pIdx of callerParamDeps) {
+              if (!node.sinkParams.has(pIdx)) {
+                node.sinkParams.add(pIdx);
+                if (!node.sinkMeta) node.sinkMeta = target.sinkMeta;
+                changed = true;
+              }
+            }
+          }
+        }
+      }
+    }
+    if (!changed) break;
+  }
+
+  return { fnNodes, fnByName };
+}
+
 function analyzeCrossFilePolyglot(polyglotFiles) {
   const findings = [];
+  const ag = getAstGrep();
+
+  if (ag) {
+    const { fnNodes, fnByName } = buildAstCallGraph(polyglotFiles, ag);
+    const seen = new Set();
+    for (const caller of fnNodes) {
+      for (const call of caller.outgoingCalls) {
+        const targets = fnByName.get(`${caller.extName}:${call.calleeName}`) || [];
+        for (const target of targets) {
+          if (target.file === caller.file || target.sinkParams.size === 0) continue;
+          const hitsTaintedArg = [...target.sinkParams].some((idx) => call.argSourceDeps[idx]);
+          if (!hitsTaintedArg) continue;
+          const dedupeKey = `${caller.file}:${call.line}:${caller.spec.ruleId}`;
+          if (seen.has(dedupeKey)) continue;
+          seen.add(dedupeKey);
+          const sinkMeta = target.sinkMeta || { file: target.file, line: target.line, fnName: target.fnName };
+          findings.push(buildFinding(
+            caller.file,
+            call.line,
+            caller.spec.ruleId,
+            caller.spec.title(call.calleeName, sinkMeta),
+            'critical',
+            'CWE-89',
+            caller.spec.hint(call.calleeName, sinkMeta),
+            `AST call-graph taint flows from ${caller.file}:${call.line} into sink ${sinkMeta.file}:${sinkMeta.line}.`,
+            call.excerpt,
+          ));
+        }
+      }
+    }
+    return findings;
+  }
+
+  // Fallback line-based cross-file analyzer when @ast-grep/napi is unavailable
   const pySinkFns = new Map();
   const goSinkFns = new Map();
 
-  // Pass 1: collect sink helper functions across Python & Go files
   for (const { rel, raw, extName } of polyglotFiles) {
     const lines = raw.split(/\r?\n/);
     if (extName === '.py') {
@@ -376,7 +663,6 @@ function analyzeCrossFilePolyglot(polyglotFiles) {
     }
   }
 
-  // Pass 2: trace tainted HTTP inputs in callers into those cross-file sink helpers
   for (const { rel, raw, extName } of polyglotFiles) {
     const lines = raw.split(/\r?\n/);
     if (extName === '.py' && pySinkFns.size > 0) {

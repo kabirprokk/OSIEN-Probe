@@ -190,6 +190,18 @@ function analyzeJavaScriptAst(raw, file, catalog, taint, suppressions, makeFindi
   const findings = [];
   const emitted = new Set();
 
+  const markSafeRuleLine = (ruleId, nodeOrLine) => {
+    if (!options.safeRuleLines) return;
+    const localLine = typeof nodeOrLine === 'number' ? nodeOrLine : nodeOrLine?.loc?.start.line;
+    if (!localLine) return;
+    let set = options.safeRuleLines.get(ruleId);
+    if (!set) {
+      set = new Set();
+      options.safeRuleLines.set(ruleId, set);
+    }
+    set.add(localLine + lineOffset);
+  };
+
   const emit = (ruleOrId, nodeOrLine, confidence = 'medium', reason) => {
     const rule = typeof ruleOrId === 'string' ? rules.get(ruleOrId) : ruleOrId;
     const localLine = typeof nodeOrLine === 'number' ? nodeOrLine : nodeOrLine?.loc?.start.line;
@@ -1161,6 +1173,31 @@ function analyzeJavaScriptAst(raw, file, catalog, taint, suppressions, makeFindi
       if (node.left?.type === 'MemberExpression' && memberName(node.left.object) === 'prototype' && ['Object', 'Array', 'String', 'Function'].includes(node.left.object?.object?.name)) {
         emit('js-prototype-pollution', node, 'high', `Direct mutation of ${node.left.object.object.name}.prototype affects all objects globally.`);
       }
+      if (node.left?.type === 'MemberExpression') {
+        const propName = memberName(node.left);
+        const objPropName = memberName(node.left.object);
+        const isProtoWrite = propName === `__proto${'__'}` || objPropName === `__proto${'__'}`
+          || (objPropName === 'prototype' && memberName(node.left.object?.object) === 'constructor');
+        if (isProtoWrite) {
+          emit('js-prototype-pollution', node, 'high', 'Direct assignment to __proto__ or constructor.prototype can pollute object prototypes.');
+        }
+        if (node.left.object?.type === 'Identifier' && ['window', 'globalThis'].includes(node.left.object.name) && propName) {
+          const STANDARD_DOM_PROPS = new Set([
+            'location', 'title', 'name', 'status', 'defaultStatus',
+            'onload', 'onerror', 'onresize', 'onscroll', 'onbeforeunload',
+            'onhashchange', 'onpopstate', 'onstorage', 'onmessage',
+            'onfocus', 'onblur', 'onkeydown', 'onkeyup',
+          ]);
+          const isCleanup = (node.right?.type === 'Identifier' && node.right.name === 'undefined')
+            || node.right?.type === 'NullLiteral'
+            || (node.right?.type === 'UnaryExpression' && node.right.operator === 'void');
+          if (STANDARD_DOM_PROPS.has(propName) || isCleanup) {
+            markSafeRuleLine('lib-global-window-mutation', node);
+          } else if (rules.has('lib-global-window-mutation')) {
+            emit('lib-global-window-mutation', node, 'medium', `Assignment to ${node.left.object.name}.${propName} mutates the global namespace.`);
+          }
+        }
+      }
       if (sink === 'src' && !staticText(node.right) && /\bscript\b/i.test(raw)) {
         const objName = node.left.object?.name || '';
         if (objName && new RegExp(`createElement\\s*\\(\\s*["']script["']\\s*\\)`).test(raw)) {
@@ -1173,6 +1210,33 @@ function analyzeJavaScriptAst(raw, file, catalog, taint, suppressions, makeFindi
           }, node, 'medium', 'A dynamically created <script> element receives a non-literal src.');
         }
       }
+    }
+
+    // Suppress regex false positives for defensive __proto__ guards & window/globalThis comparisons.
+    if (
+      ((node.type === 'StringLiteral' && node.value === `__proto${'__'}`)
+        || (node.type === 'Identifier' && node.name === `__proto${'__'}`))
+      && parent
+      && (
+        (parent.type === 'BinaryExpression' && ['===', '!==', '==', '!=', 'in'].includes(parent.operator))
+        || (parent.type === 'SwitchCase' && parentKey === 'test')
+        || parent.type === 'ArrayExpression'
+        || (parent.type === 'CallExpression' && parentKey === 'arguments')
+        || (parent.type === 'UnaryExpression' && ['delete', 'typeof'].includes(parent.operator))
+      )
+    ) {
+      markSafeRuleLine('js-prototype-pollution', node);
+    }
+
+    if (
+      node.type === 'BinaryExpression'
+      && ['===', '!==', '==', '!=', '<', '>', '<=', '>='].includes(node.operator)
+      && (
+        (node.left?.type === 'MemberExpression' && node.left.object?.type === 'Identifier' && ['window', 'globalThis'].includes(node.left.object.name))
+        || (node.right?.type === 'MemberExpression' && node.right.object?.type === 'Identifier' && ['window', 'globalThis'].includes(node.right.object.name))
+      )
+    ) {
+      markSafeRuleLine('lib-global-window-mutation', node);
     }
 
     // Undeclared identifier check (skip .d.ts, re-exports, type nodes, property keys, declarations, and typeof).

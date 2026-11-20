@@ -165,3 +165,95 @@ test('Cloud Codex provider supports health, fix generation, and safe file patchi
 
   await assert.rejects(() => applyFindingFix(root, '../outside.js', 'a', 'b'), /escapes/);
 });
+
+test('Cloud Claude, OpenCode, and Pi providers support health and fix generation', async () => {
+  const { checkAiHealth: checkHealth, generateFindingFix } = require('../electron/ai-review.cjs');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-providers-'));
+  await fs.writeFile(path.join(root, 'app.js'), 'el.innerHTML = userBio;\n', 'utf8');
+  const finding = { id: 'f1', title: 'Direct innerHTML', severity: 'high', cwe: 'CWE-79', ruleId: 'js-innerhtml', file: 'app.js', line: 1, excerpt: 'el.innerHTML = userBio;' };
+
+  // 1. Claude (Anthropic Messages API)
+  const claudeHealth = await checkHealth({ provider: 'cloud-claude', apiKey: 'sk-ant-test' });
+  assert.equal(claudeHealth.available, true);
+  assert.equal(claudeHealth.provider, 'cloud-claude');
+  const claudePatch = await generateFindingFix(root, finding, {
+    provider: 'cloud-claude',
+    apiKey: 'sk-ant-test',
+    model: 'claude-sonnet-4-5',
+    fetch: async (url, init) => {
+      assert.ok(url.includes('api.anthropic.com/v1/messages'));
+      assert.equal(init.headers['x-api-key'], 'sk-ant-test');
+      return {
+        ok: true,
+        json: async () => ({
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              explanation: 'Use textContent instead of innerHTML.',
+              target: 'el.innerHTML = userBio;',
+              replacement: 'el.textContent = userBio;',
+            }),
+          }],
+        }),
+      };
+    },
+  });
+  assert.equal(claudePatch.replacement, 'el.textContent = userBio;');
+
+  // 2. OpenCode
+  const ocHealth = await checkAiHealth({ provider: 'cloud-opencode', apiKey: 'oc-test' });
+  assert.equal(ocHealth.available, true);
+  assert.equal(ocHealth.provider, 'cloud-opencode');
+  const ocPatch = await generateFindingFix(root, finding, {
+    provider: 'cloud-opencode',
+    apiKey: 'oc-test',
+    model: 'opencode/big-pickle',
+    fetch: async (url, init) => {
+      assert.ok(url.includes('opencode.ai'));
+      assert.equal(init.headers.authorization, 'Bearer oc-test');
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                explanation: 'Escape output with textContent.',
+                target: 'el.innerHTML = userBio;',
+                replacement: 'el.textContent = userBio;',
+              }),
+            },
+          }],
+        }),
+      };
+    },
+  });
+  assert.equal(ocPatch.replacement, 'el.textContent = userBio;');
+
+  // 3. Pi Agent
+  const piHealth = await checkAiHealth({ provider: 'cloud-pi', apiKey: 'pi-test' });
+  assert.equal(piHealth.available, true);
+  assert.equal(piHealth.provider, 'cloud-pi');
+  const piPatch = await generateFindingFix(root, finding, {
+    provider: 'cloud-pi',
+    apiKey: 'pi-test',
+    model: 'gpt-5.2-codex',
+    fetch: async (_url, init) => {
+      assert.equal(init.headers.authorization, 'Bearer pi-test');
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                explanation: 'Use textContent safely.',
+                target: 'el.innerHTML = userBio;',
+                replacement: 'el.textContent = userBio;',
+              }),
+            },
+          }],
+        }),
+      };
+    },
+  });
+  assert.equal(piPatch.replacement, 'el.textContent = userBio;');
+});

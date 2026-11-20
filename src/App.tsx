@@ -7,7 +7,8 @@ import './UIOverrides.css'
 type Kind = 'Website' | 'Software' | 'API / backend' | 'Mobile app' | 'Library' | 'Data / ML' | 'Cloud / DevOps' | 'Blockchain / Web3' | 'Desktop / Electron' | 'CLI / Automation'
 type AiAssessment = { verdict: 'likely_real' | 'likely_false_positive' | 'uncertain'; confidence: number; rationale: string; evidence: string; reviewAdvice: string; model: string; reviewedAt: string }
 type Finding = { id: string; title: string; severity: string; file: string; line: number; excerpt: string; ruleId?: string; cwe?: string; hint?: string; confidence?: string; reason?: string; isNew?: boolean; fixed?: boolean; aiAssessment?: AiAssessment; aiReviewError?: string }
-type AiConfig = { provider: 'local' | 'cloud-codex'; model: string; codexConnected?: boolean; hasApiKey: boolean; apiKeyMasked: string; localModels: string[]; localAvailable?: boolean; codexModels: string[] }
+type AiProviderId = 'local' | 'cloud-codex' | 'cloud-claude' | 'cloud-opencode' | 'cloud-pi'
+type AiConfig = { provider: AiProviderId; model: string; codexConnected?: boolean; claudeConnected?: boolean; opencodeConnected?: boolean; piConnected?: boolean; connectedByProvider?: Record<string, boolean>; hasApiKey: boolean; apiKeyMasked: string; localModels: string[]; localAvailable?: boolean; codexModels: string[]; claudeModels?: string[]; opencodeModels?: string[]; piModels?: string[] }
 type FindingFixPreview = { projectId: string; findingId: string; file: string; explanation: string; target: string; replacement: string; model: string }
 type TestTarget = { file: string; runner: 'node' | 'npm' | 'pytest' | 'go' | 'cargo'; names?: string[]; command: string }
 type SeverityCounts = { critical: number; high: number; medium: number; low: number; info: number }
@@ -47,6 +48,7 @@ type ConfirmState = {
   tone: 'danger' | 'primary'
   onConfirm: () => Promise<void> | void
 } | null
+type WebRemediation = { url: string; issueCount: number; actions: { ruleId: string; severity: string; title: string; fix: string }[]; configs: Record<'nginx' | 'apache' | 'express' | 'nextjs' | 'vercel' | 'cloudflare', string> }
 type Bridge = {
   pickFolder(): Promise<string | null>
   listProjects(): Promise<Project[]>
@@ -56,13 +58,16 @@ type Bridge = {
   openProject(id: string): Promise<boolean>
   openDataFolder(): Promise<boolean>
   scanProject(id: string): Promise<Scan>
+  generateWebRemediation?(id: string): Promise<WebRemediation>
   verifyFinding(p: { projectId: string; findingId: string }): Promise<AiAssessment>
   getFindingContext?(p: { projectId: string; findingId: string }): Promise<SourceContext>
   checkAiStatus?(): Promise<AiHealth>
   getAiConfig?(): Promise<AiConfig>
-  saveAiConfig?(p: { provider: 'local' | 'cloud-codex'; model: string; apiKey?: string; clearApiKey?: boolean }): Promise<{ config: AiConfig; health: AiHealth }>
+  saveAiConfig?(p: { provider: AiProviderId; model: string; apiKey?: string; clearApiKey?: boolean }): Promise<{ config: AiConfig; health: AiHealth }>
   connectCodex?(): Promise<{ config: AiConfig; health: AiHealth }>
   disconnectCodex?(): Promise<{ config: AiConfig; health: AiHealth }>
+  connectProvider?(provider: AiProviderId): Promise<{ config: AiConfig; health: AiHealth }>
+  disconnectProvider?(provider: AiProviderId): Promise<{ config: AiConfig; health: AiHealth }>
   generateFindingFix?(p: { projectId: string; findingId: string }): Promise<{ explanation: string; target: string; replacement: string; file: string; model: string }>
   applyFindingFix?(p: { projectId: string; findingId: string; file: string; target: string; replacement: string }): Promise<{ applied: boolean; file: string }>
   fixAllFindings?(p: { projectId: string }): Promise<{ total: number; fixed: number; failed: number }>
@@ -112,7 +117,7 @@ function App() {
   const [route, setRoute] = useState<Route>('Projects')
   const [loading, setLoading] = useState(() => Boolean(bridge))
   const [dialog, setDialog] = useState(false)
-  const [source, setSource] = useState<'folder' | 'repo'>('folder')
+  const [source, setSource] = useState<'folder' | 'repo' | 'url'>('folder')
   const [url, setUrl] = useState('')
   const [folder, setFolder] = useState('')
   const [kind, setKind] = useState<Kind | null>(null)
@@ -136,6 +141,9 @@ function App() {
   const [sysProfile, setSysProfile] = useState<SystemProfile | null>(null)
   const [extremeChoice, setExtremeChoice] = useState<Project | null>(null)
   const [extreme, setExtreme] = useState<ExtremeState | null>(null)
+  const [webFixPack, setWebFixPack] = useState<WebRemediation | null>(null)
+  const [webFixPlatform, setWebFixPlatform] = useState<'nginx' | 'apache' | 'express' | 'nextjs' | 'vercel' | 'cloudflare'>('nginx')
+  const [webFixCopied, setWebFixCopied] = useState(false)
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -311,7 +319,67 @@ function App() {
     if (!bridge?.getAiConfig) return
     void bridge.getAiConfig().then(setAiConfig).catch((e) => setMessage(errorText(e)))
   }, [bridge])
-  const saveAiSettings = async (nextProvider: 'local' | 'cloud-codex', nextModel: string, newKey?: string, clearApiKey?: boolean) => {
+  const CLOUD_PROVIDER_INFO: Record<Exclude<AiProviderId, 'local'>, { label: string; short: string; connectBtn: string; connectedTitle: string; connectTitle: string; connectedDesc: string; connectDesc: string; placeholder: string }> = {
+    'cloud-codex': {
+      label: 'Codex (OpenAI)',
+      short: 'Codex',
+      connectBtn: 'Connect Codex (ChatGPT)',
+      connectedTitle: 'ChatGPT account connected ✓',
+      connectTitle: 'Sign in with your ChatGPT account',
+      connectedDesc: 'Using your ChatGPT subscription via Codex OAuth (~/.codex/auth.json) — no API key needed.',
+      connectDesc: 'Opens your browser to sign in with ChatGPT (Plus / Pro / Team) — no API key required.',
+      placeholder: 'sk-...',
+    },
+    'cloud-claude': {
+      label: 'Claude (Anthropic)',
+      short: 'Claude',
+      connectBtn: 'Connect Claude Code',
+      connectedTitle: 'Claude Code account connected ✓',
+      connectTitle: 'Sign in with Claude Code',
+      connectedDesc: 'Using your Claude subscription via Claude Code CLI (~/.claude/.credentials.json) — no API key needed.',
+      connectDesc: 'Opens your browser to sign in with your Claude Pro/Max/Team subscription — no API key required.',
+      placeholder: 'sk-ant-...',
+    },
+    'cloud-opencode': {
+      label: 'OpenCode',
+      short: 'OpenCode',
+      connectBtn: 'Connect OpenCode',
+      connectedTitle: 'OpenCode account connected ✓',
+      connectTitle: 'Sign in with OpenCode CLI',
+      connectedDesc: 'Using your OpenCode CLI credentials (~/.local/share/opencode/auth.json).',
+      connectDesc: 'Opens your browser to sign in with OpenCode — no API key required.',
+      placeholder: 'oc-...',
+    },
+    'cloud-pi': {
+      label: 'Pi Agent',
+      short: 'Pi',
+      connectBtn: 'Connect Pi Agent',
+      connectedTitle: 'Pi Agent connected ✓',
+      connectTitle: 'Sign in with Pi Coding Agent',
+      connectedDesc: 'Using your Pi Agent credentials (~/.pi/agent/auth.json).',
+      connectDesc: 'Opens your browser to sign in with Pi Coding Agent — no API key required.',
+      placeholder: 'sk-...',
+    },
+  }
+  const isCloudAi = Boolean(aiConfig && aiConfig.provider !== 'local')
+  const cloudModelsFor = (p: AiProviderId): string[] => {
+    if (!aiConfig) return []
+    if (p === 'cloud-claude') return aiConfig.claudeModels || ['claude-sonnet-4-5']
+    if (p === 'cloud-opencode') return aiConfig.opencodeModels || ['opencode/big-pickle']
+    if (p === 'cloud-pi') return aiConfig.piModels || ['claude-sonnet-4-5']
+    if (p === 'cloud-codex') return aiConfig.codexModels || ['gpt-5.2-codex']
+    return aiConfig.localModels || []
+  }
+  const isProviderConnected = (p: AiProviderId): boolean => {
+    if (!aiConfig || p === 'local') return false
+    if (aiConfig.connectedByProvider && typeof aiConfig.connectedByProvider[p] === 'boolean') return aiConfig.connectedByProvider[p]
+    if (p === 'cloud-codex') return Boolean(aiConfig.codexConnected)
+    if (p === 'cloud-claude') return Boolean(aiConfig.claudeConnected)
+    if (p === 'cloud-opencode') return Boolean(aiConfig.opencodeConnected)
+    if (p === 'cloud-pi') return Boolean(aiConfig.piConnected)
+    return false
+  }
+  const saveAiSettings = async (nextProvider: AiProviderId, nextModel: string, newKey?: string, clearApiKey?: boolean) => {
     if (!bridge?.saveAiConfig) return
     setBusy('save-ai')
     setMessage('')
@@ -326,27 +394,29 @@ function App() {
       setBusy('')
     }
   }
-  const connectCodexAccount = async () => {
-    if (!bridge?.connectCodex) return
-    setBusy('connect-codex')
+  const connectCloudProvider = async (providerId: Exclude<AiProviderId, 'local'>) => {
+    setBusy('connect-provider')
     setMessage('')
     try {
-      const res = await bridge.connectCodex()
+      const res = bridge?.connectProvider
+        ? await bridge.connectProvider(providerId)
+        : await bridge!.connectCodex!()
       setAiConfig(res.config)
       setAiHealth(res.health)
-      setMessage('ChatGPT account connected via Codex! "Fix finding" is now unlocked.')
+      setMessage(`${CLOUD_PROVIDER_INFO[providerId].short} connected! "Fix finding" is now unlocked.`)
     } catch (e) {
       setMessage(errorText(e))
     } finally {
       setBusy('')
     }
   }
-  const disconnectCodexAccount = async () => {
-    if (!bridge?.disconnectCodex) return
-    setBusy('connect-codex')
+  const disconnectCloudProvider = async (providerId: Exclude<AiProviderId, 'local'>) => {
+    setBusy('connect-provider')
     setMessage('')
     try {
-      const res = await bridge.disconnectCodex()
+      const res = bridge?.disconnectProvider
+        ? await bridge.disconnectProvider(providerId)
+        : await bridge!.disconnectCodex!()
       setAiConfig(res.config)
       setAiHealth(res.health)
     } catch (e) {
@@ -463,31 +533,9 @@ function App() {
       })
     })
   }, [bridge])
-  const startExtremeTest = async (p: Project) => {
-    if (!bridge?.startExtremeTest) return
+  const startExtremeTest = async (_p: Project) => {
     setExtremeChoice(null)
-    setSelectedProject(p)
-    setRoute('Test runs')
-    setMessage('')
-    setExtreme({
-      projectId: p.id,
-      projectName: p.name,
-      running: true,
-      step: 0,
-      maxSteps: sysProfile?.maxSteps || 55,
-      url: 'Starting sandbox…',
-      action: 'boot',
-      targetLabel: '',
-      frameUrl: '',
-      stats: { pages: 0, clicks: 0, inputsFuzzed: 0, findings: 0 },
-      logs: [{ level: 'info', text: `Launching isolated sandbox for ${p.name}…` }],
-      findings: [],
-    })
-    try {
-      await bridge.startExtremeTest(p.id)
-    } catch (e) {
-      setExtreme(prev => prev ? { ...prev, running: false, error: errorText(e) } : null)
-    }
+    setMessage('Extreme Live Sandbox Test is currently under development and locked.')
   }
   const stopExtremeTest = async (projectId: string) => {
     try {
@@ -496,24 +544,46 @@ function App() {
       setMessage(errorText(e))
     }
   }
+  const openWebFix = async (p: Project) => {
+    if (!bridge?.generateWebRemediation) return
+    setBusy(`webfix:${p.id}`)
+    try {
+      const pack = await bridge.generateWebRemediation(p.id)
+      setWebFixPack(pack)
+      setWebFixCopied(false)
+    } catch (e) {
+      setMessage(errorText(e))
+    } finally {
+      setBusy('')
+    }
+  }
   const triggerProjectTest = (p: Project) => {
-    if (p.kind === 'Website' && bridge?.startExtremeTest) {
+    if (p.kind === 'Website' && bridge?.startExtremeTest && !/^https?:\/\//i.test(p.root)) {
       setExtremeChoice(p)
       return
     }
     void scan(p)
   }
   const addProject = async () => {
-    if (!kind) return
+    const effectiveKind = kind || (source === 'url' ? 'Website' : null)
+    if (!effectiveKind) return
     setBusy('add')
     setMessage('')
     try {
-      const p = source === 'repo' ? await bridge!.cloneRepo({ url, kind }) : await bridge!.addProject({ root: folder, kind })
+      const p = source === 'repo'
+        ? await bridge!.cloneRepo({ url, kind: effectiveKind })
+        : source === 'url'
+          ? await bridge!.addProject({ root: url.trim(), kind: 'Website' })
+          : await bridge!.addProject({ root: folder, kind: effectiveKind })
       setProjects(current => [p, ...current])
       setDialog(false)
       setKind(null)
       setFolder('')
       setUrl('')
+      if (source === 'url') {
+        void scan(p)
+        return
+      }
       if (p.kind === 'Website' && bridge?.startExtremeTest) {
         setExtremeChoice(p)
         return
@@ -728,7 +798,7 @@ function App() {
             projects={projects}
             busy={busy}
             bridge={bridge}
-            isCloudCodex={aiConfig?.provider === 'cloud-codex'}
+            isCloudCodex={isCloudAi}
             onVerify={verifyFinding}
             onFix={requestFix}
             onExport={exportReport}
@@ -737,7 +807,7 @@ function App() {
         ) : route === 'Test runs' ? (
           <>
             {extreme && <ExtremeSandboxView extreme={extreme} sysProfile={sysProfile} onStop={stopExtremeTest} onClose={() => setExtreme(null)}/>}
-            <Runs projects={projects} selected={selectedProject} busy={busy} isCloudCodex={aiConfig?.provider === 'cloud-codex'} onScan={scan} onExtreme={startExtremeTest} onFixAll={fixAllWithAi} onTest={runTests} onRunFile={runTestFile} onExport={exportReport}/>
+            <Runs projects={projects} selected={selectedProject} busy={busy} isCloudCodex={isCloudAi} onScan={scan} onExtreme={startExtremeTest} onFixAll={fixAllWithAi} onWebFix={openWebFix} onTest={runTests} onRunFile={runTestFile} onExport={exportReport}/>
           </>
         ) : route === 'Rule catalog' ? (
           <RuleCatalog catalog={catalog}/>
@@ -746,9 +816,9 @@ function App() {
         ) : (
           <div className="settings-panel">
             <h2>AI Provider &amp; Models</h2>
-            <p>Choose between 100% offline local Ollama models or Cloud Codex (OpenAI) to unlock direct one-click finding fixes.</p>
+            <p>Choose between 100% offline local Ollama models or Cloud Coding Agents (Claude, Codex, OpenCode, Pi) to unlock direct one-click finding fixes.</p>
             {aiConfig && <div className="ai-provider-card">
-              <div className="provider-tabs">
+              <div className="provider-tabs" style={{ flexWrap: 'wrap' }}>
                 <button
                   type="button"
                   className={aiConfig.provider === 'local' ? 'selected' : ''}
@@ -756,13 +826,16 @@ function App() {
                 >
                   Local (Ollama)
                 </button>
-                <button
-                  type="button"
-                  className={aiConfig.provider === 'cloud-codex' ? 'selected' : ''}
-                  onClick={() => void saveAiSettings('cloud-codex', aiConfig.codexModels[0] || 'gpt-5.2-codex')}
-                >
-                  Cloud (Codex)
-                </button>
+                {(['cloud-claude', 'cloud-codex', 'cloud-opencode', 'cloud-pi'] as const).map(pid => (
+                  <button
+                    key={pid}
+                    type="button"
+                    className={aiConfig.provider === pid ? 'selected' : ''}
+                    onClick={() => void saveAiSettings(pid, cloudModelsFor(pid)[0] || '')}
+                  >
+                    {CLOUD_PROVIDER_INFO[pid].short}
+                  </button>
+                ))}
               </div>
               <div className="provider-fields">
                 <label className="field-label">
@@ -775,42 +848,41 @@ function App() {
                       value={aiConfig.model}
                       onChange={e => void saveAiSettings(aiConfig.provider, e.target.value)}
                     >
-                      {(aiConfig.provider === 'cloud-codex' ? aiConfig.codexModels : aiConfig.localModels).map(m => (
+                      {cloudModelsFor(aiConfig.provider).map(m => (
                         <option key={m} value={m}>{m}</option>
                       ))}
                     </select>
                   )}
                 </label>
-                {aiConfig.provider === 'cloud-codex' && (
-                  <div className="codex-auth-box">
+                {aiConfig.provider !== 'local' && (() => {
+                  const pid = aiConfig.provider as Exclude<AiProviderId, 'local'>
+                  const pinfo = CLOUD_PROVIDER_INFO[pid]
+                  const connected = isProviderConnected(pid)
+                  return <div className="codex-auth-box">
                     <div className="codex-oauth-row">
                       <div>
-                        <strong>{aiConfig.codexConnected ? 'ChatGPT account connected ✓' : 'Sign in with your ChatGPT account'}</strong>
-                        <small>
-                          {aiConfig.codexConnected
-                            ? 'Using your ChatGPT subscription via Codex OAuth (~/.codex/auth.json) — no API key needed.'
-                            : 'Opens your browser to sign in with ChatGPT (Plus / Pro / Team) — no API key required.'}
-                        </small>
+                        <strong>{connected ? pinfo.connectedTitle : pinfo.connectTitle}</strong>
+                        <small>{connected ? pinfo.connectedDesc : pinfo.connectDesc}</small>
                       </div>
                       <div className="export-actions">
-                        {aiConfig.codexConnected ? (
-                          <button type="button" className="filter-button" disabled={busy === 'connect-codex'} onClick={() => void disconnectCodexAccount()}>
+                        {connected ? (
+                          <button type="button" className="filter-button" disabled={busy === 'connect-provider'} onClick={() => void disconnectCloudProvider(pid)}>
                             Disconnect
                           </button>
                         ) : (
-                          <button type="button" className="primary" disabled={busy === 'connect-codex'} onClick={() => void connectCodexAccount()}>
-                            <ExternalLink size={14}/> {busy === 'connect-codex' ? 'Waiting for browser sign-in…' : 'Connect Codex (ChatGPT)'}
+                          <button type="button" className="primary" disabled={busy === 'connect-provider'} onClick={() => void connectCloudProvider(pid)}>
+                            <ExternalLink size={14}/> {busy === 'connect-provider' ? 'Connecting…' : pinfo.connectBtn}
                           </button>
                         )}
                       </div>
                     </div>
                     <details className="codex-api-fallback">
-                      <summary>Advanced: Or use an OpenAI API key instead {aiConfig.hasApiKey ? `(saved: ${aiConfig.apiKeyMasked})` : ''}</summary>
+                      <summary>Advanced: Or use an API key instead {aiConfig.hasApiKey ? `(saved: ${aiConfig.apiKeyMasked})` : ''}</summary>
                       <div className="codex-key-row">
                         <input
                           type="password"
                           className="text-field"
-                          placeholder={aiConfig.hasApiKey ? 'Enter new key to replace…' : 'sk-...'}
+                          placeholder={aiConfig.hasApiKey ? 'Enter new key to replace…' : pinfo.placeholder}
                           value={apiKeyInput}
                           onChange={e => setApiKeyInput(e.target.value)}
                         />
@@ -819,7 +891,7 @@ function App() {
                             type="button"
                             className="filter-button"
                             disabled={!apiKeyInput.trim() || busy === 'save-ai'}
-                            onClick={() => void saveAiSettings('cloud-codex', aiConfig.model, apiKeyInput)}
+                            onClick={() => void saveAiSettings(pid, aiConfig.model, apiKeyInput)}
                           >
                             Save key
                           </button>
@@ -828,7 +900,7 @@ function App() {
                               type="button"
                               className="filter-button"
                               disabled={busy === 'save-ai'}
-                              onClick={() => void saveAiSettings('cloud-codex', aiConfig.model, undefined, true)}
+                              onClick={() => void saveAiSettings(pid, aiConfig.model, undefined, true)}
                             >
                               Clear key
                             </button>
@@ -837,12 +909,12 @@ function App() {
                       </div>
                     </details>
                   </div>
-                )}
+                })()}
               </div>
             </div>}
             {aiHealth && <div className="settings-row">
               <div>
-                <strong>{aiConfig?.provider === 'cloud-codex' ? `Cloud Codex (${aiHealth.model})` : `Local Ollama review engine (${aiHealth.model})`}</strong>
+                <strong>{aiConfig && aiConfig.provider !== 'local' ? `${CLOUD_PROVIDER_INFO[aiConfig.provider].label} (${aiHealth.model})` : `Local Ollama review engine (${aiHealth.model})`}</strong>
                 <small>{aiHealth.message}</small>
               </div>
               <button className="filter-button" onClick={() => void refreshAll()} disabled={busy === 'refresh'}>Check status</button>
@@ -866,15 +938,18 @@ function App() {
     {dialog && <div className="overlay" onMouseDown={e => { if (e.target === e.currentTarget && busy !== 'add') setDialog(false) }}>
       <section className="dialog">
         <div className="dialog-head">
-          <div><div className="dialog-icon"><Plus size={18}/></div><h2>Add a project</h2><p>Connect a local folder or clone a repository</p></div>
+          <div><div className="dialog-icon"><Plus size={18}/></div><h2>Add a project</h2><p>Connect a local folder, clone a repository, or audit a live URL</p></div>
           <button className="icon-button" onClick={() => setDialog(false)}><X size={18}/></button>
         </div>
         <div className="source-tabs">
           <button className={source === 'folder' ? 'selected' : ''} onClick={() => setSource('folder')}><Folder size={16}/> Local folder</button>
           <button className={source === 'repo' ? 'selected' : ''} onClick={() => setSource('repo')}><GitBranch size={16}/> Git repository</button>
+          <button className={source === 'url' ? 'selected' : ''} onClick={() => { setSource('url'); setKind('Website') }}><Globe2 size={16}/> Live URL</button>
         </div>
         {source === 'repo' ? (
           <label className="field-label">Repository URL<input className="text-field" placeholder="https://github.com/owner/repository" value={url} onChange={e => setUrl(e.target.value)}/></label>
+        ) : source === 'url' ? (
+          <label className="field-label">Website URL (passive HTTP & HTML audit)<input className="text-field" placeholder="https://example.com" value={url} onChange={e => setUrl(e.target.value)}/></label>
         ) : (
           <div className="folder-picker">
             <div><Folder size={17}/><span>{folder || 'No folder selected'}</span></div>
@@ -889,9 +964,9 @@ function App() {
         </div>
         {message && <div className="form-error">{message}</div>}
         <div className="dialog-foot">
-          <span>Scans inspect files; they do not execute project code</span>
-          <button className="primary" disabled={!kind || busy === 'add' || (source === 'folder' ? !folder : !url)} onClick={() => void addProject()}>
-            {busy === 'add' ? 'Adding…' : source === 'repo' ? 'Clone and add' : 'Add project'} <ArrowUpRight size={15}/>
+          <span>{source === 'url' ? 'Performs a single polite GET request; no intrusive fuzzing' : 'Scans inspect files; they do not execute project code'}</span>
+          <button className="primary" disabled={(!kind && source !== 'url') || busy === 'add' || (source === 'folder' ? !folder : !url)} onClick={() => void addProject()}>
+            {busy === 'add' ? 'Adding…' : source === 'repo' ? 'Clone and add' : source === 'url' ? 'Add & audit URL' : 'Add project'} <ArrowUpRight size={15}/>
           </button>
         </div>
       </section>
@@ -947,6 +1022,29 @@ function App() {
         </button>
       </div>
     </section></div>}
+    {webFixPack && <div className="overlay" onMouseDown={e => { if (e.target === e.currentTarget) setWebFixPack(null) }}><section className="dialog" style={{ maxWidth: 760 }}>
+      <div className="dialog-head">
+        <div><div className="dialog-icon"><ShieldCheck size={18}/></div><h2>Fix Live Website URL</h2><p>{webFixPack.url} · {webFixPack.issueCount} issue{webFixPack.issueCount === 1 ? '' : 's'} addressed</p></div>
+        <button className="icon-button" onClick={() => setWebFixPack(null)}><X size={18}/></button>
+      </div>
+      <div className="source-tabs" style={{ flexWrap: 'wrap' }}>
+        {(['nginx', 'apache', 'express', 'nextjs', 'vercel', 'cloudflare'] as const).map(plat => (
+          <button key={plat} className={webFixPlatform === plat ? 'selected' : ''} onClick={() => { setWebFixPlatform(plat); setWebFixCopied(false) }}>
+            {plat === 'nextjs' ? 'Next.js' : plat === 'cloudflare' ? 'Cloudflare' : plat.charAt(0).toUpperCase() + plat.slice(1)}
+          </button>
+        ))}
+      </div>
+      <pre style={{ maxHeight: 300, overflow: 'auto', background: 'rgba(0,0,0,0.35)', padding: 12, borderRadius: 8, fontSize: 12, lineHeight: 1.5, margin: '8px 0' }}>{webFixPack.configs[webFixPlatform]}</pre>
+      <div className="dialog-foot">
+        <span>Apply this config to your server, CDN, or framework</span>
+        <div className="export-actions">
+          <button className="filter-button" onClick={() => setWebFixPack(null)}>Close</button>
+          <button className="primary" onClick={async () => { try { await navigator.clipboard.writeText(webFixPack.configs[webFixPlatform]); setWebFixCopied(true); setTimeout(() => setWebFixCopied(false), 1800) } catch { /* ignore */ } }}>
+            {webFixCopied ? 'Copied!' : 'Copy Fix Config'}
+          </button>
+        </div>
+      </div>
+    </section></div>}
     {extremeChoice && <div className="overlay" onMouseDown={e => { if (e.target === e.currentTarget) setExtremeChoice(null) }}><section className="dialog choice-dialog">
       <div className="dialog-brand">
         <img className="dialog-logo" src="./logo.png" alt="OSIEN Probe"/>
@@ -961,11 +1059,16 @@ function App() {
           <strong>Traditional Test</strong>
           <small>Evaluates 550+ static rules, AST checks, taint tracking, and detects your unit test suite without running the app.</small>
         </button>
-        <button className="mode-card mode-card-extreme" onClick={() => void startExtremeTest(extremeChoice)}>
-          <div className="mode-badge mode-badge-extreme">Website · Live Sandbox</div>
+        <button
+          className="mode-card mode-card-extreme"
+          disabled
+          title="Extreme Live Sandbox Test is currently under development"
+          style={{ opacity: 0.55, cursor: 'not-allowed' }}
+        >
+          <div className="mode-badge mode-badge-extreme">Under Development · Locked</div>
           <strong>Extreme Live Sandbox Test</strong>
           <small>
-            Boots {extremeChoice.name} in an isolated 127.0.0.1 sandbox ({sysProfile ? `${sysProfile.cpuCores} cores · ${sysProfile.totalMemGb} GB RAM` : 'local PC'}), clicks every UI flow, fuzzes forms &amp; XSS escaping without AI, and streams live side-by-side.
+            Temporarily locked while in active development. Use Traditional Test for static, AST, taint, and CVE analysis.
           </small>
         </button>
       </div>
@@ -1213,6 +1316,7 @@ function Runs({
   onScan,
   onExtreme,
   onFixAll,
+  onWebFix,
   onTest,
   onRunFile,
   onExport,
@@ -1224,6 +1328,7 @@ function Runs({
   onScan(p: Project): void
   onExtreme(p: Project): void
   onFixAll(p: Project): void
+  onWebFix(p: Project): void
   onTest(p: Project): void
   onRunFile(p: Project, target: TestTarget): void
   onExport(format: 'sarif' | 'markdown' | 'json', projectId?: string): void
@@ -1239,8 +1344,19 @@ function Runs({
             <button className="filter-button" onClick={() => onExport('markdown', p.id)} disabled={!!busy}><Download size={13}/> Report</button>
           </>}
           {p.kind === 'Website' && (
-            <button className="filter-button extreme-btn" onClick={() => onExtreme(p)} disabled={!!busy}>
-              <Activity size={13}/> Extreme sandbox
+            <button
+              className="filter-button extreme-btn"
+              onClick={() => onExtreme(p)}
+              disabled
+              title="Extreme Live Sandbox Test is currently under development"
+              style={{ opacity: 0.55, cursor: 'not-allowed' }}
+            >
+              <Activity size={13}/> Extreme sandbox (Under dev)
+            </button>
+          )}
+          {p.latestRun && /^https?:\/\//i.test(p.root) && (
+            <button className="filter-button fix-finding-btn" onClick={() => onWebFix(p)} disabled={!!busy}>
+              <ShieldCheck size={13}/> {busy === `webfix:${p.id}` ? 'Generating…' : 'Fix Live URL'}
             </button>
           )}
           {isCloudCodex && p.latestRun && p.latestRun.findings.some(f => !f.fixed && ['critical', 'high', 'medium'].includes(f.severity)) && (
