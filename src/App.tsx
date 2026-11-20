@@ -50,6 +50,7 @@ type ConfirmState = {
 } | null
 type WebRemediation = { url: string; issueCount: number; actions: { ruleId: string; severity: string; title: string; fix: string }[]; configs: Record<'nginx' | 'apache' | 'express' | 'nextjs' | 'vercel' | 'cloudflare', string> }
 type Bridge = {
+  getPathForFile?(file: File): string
   pickFolder(): Promise<string | null>
   listProjects(): Promise<Project[]>
   addProject(p: { root: string; kind: Kind }): Promise<Project>
@@ -647,7 +648,21 @@ function App() {
   const navTo = (item: Route) => { setRoute(item); setPage(0); setMessage('') }
   const securityCount = findings.filter(f => ['critical', 'high'].includes(f.severity)).length
 
-  return <div className="app-shell">
+  return <div
+    className="app-shell"
+    onDragOver={e => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault() }}
+    onDrop={e => {
+      const file = e.dataTransfer?.files?.[0]
+      if (!file || !bridge?.getPathForFile) return
+      e.preventDefault()
+      const droppedPath = bridge.getPathForFile(file)
+      if (!droppedPath) return
+      setSource('folder')
+      setFolder(droppedPath)
+      setMessage('')
+      setDialog(true)
+    }}
+  >
     <aside className="sidebar">
       <div className="brand"><img className="brand-logo" src="./logo.png" alt="OSIEN Probe"/><span>OSIEN Probe</span></div>
       <div className="workspace-wrap">

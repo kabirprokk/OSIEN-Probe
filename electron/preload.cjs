@@ -1,6 +1,7 @@
 'use strict';
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('deepcheck', {
+  getPathForFile: (file) => (webUtils?.getPathForFile ? webUtils.getPathForFile(file) : file?.path || ''),
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
   listProjects: () => ipcRenderer.invoke('list-projects'),
   addProject: (payload) => ipcRenderer.invoke('add-project', payload),

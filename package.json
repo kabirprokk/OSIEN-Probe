@@ -69,8 +69,7 @@
       "output": "release"
     },
     "asarUnpack": [
-      "node_modules/@ast-grep/lang-*/prebuilds/**/parser.so",
-      "node_modules/@ast-grep/napi/*.node"
+      "node_modules/@ast-grep/**"
     ],
     "files": [
       "dist/**/*",
@@ -84,6 +83,13 @@
       "target": [
         "nsis"
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "OSIEN Probe"
     },
     "mac": {
       "icon": "build/icon.png",

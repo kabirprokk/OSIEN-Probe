@@ -81,25 +81,74 @@ async function publicAiConfig(cfg) {
 }
 async function readProjects() { try { return JSON.parse(await fs.readFile(statePath(), 'utf8')); } catch { return []; } }
 async function saveProjects(projects) { await fs.mkdir(path.dirname(statePath()), { recursive: true }); await fs.writeFile(statePath(), JSON.stringify(projects, null, 2), 'utf8'); }
-function createWindow() {
+const windowStatePath = () => path.join(app.getPath('userData'), 'osien-window-state.json');
+async function readWindowState() {
+  const text = await fs.readFile(windowStatePath(), 'utf8').catch(() => '');
+  if (text) {
+    try {
+      const raw = JSON.parse(text);
+      if (raw && typeof raw.width === 'number' && typeof raw.height === 'number') return raw;
+    } catch (err) {
+      void err;
+    }
+  }
+  return { width: 1440, height: 920, isMaximized: false };
+}
+function createWindow(ws = { width: 1440, height: 920, isMaximized: false }) {
   const win = new BrowserWindow({
-    width: 1440,
-    height: 920,
+    width: Math.max(1000, ws.width),
+    height: Math.max(680, ws.height),
+    ...(typeof ws.x === 'number' && typeof ws.y === 'number' ? { x: ws.x, y: ws.y } : {}),
     minWidth: 1000,
     minHeight: 680,
+    show: false,
     backgroundColor: '#0c0d0e',
     title: 'OSIEN Probe',
-    icon: path.join(__dirname, '../build/icon.png'),
+    icon: path.join(__dirname, process.platform === 'win32' ? '../build/icon.ico' : '../build/icon.png'),
     autoHideMenuBar: true,
     titleBarStyle: process.platform === 'linux' ? 'default' : 'hidden',
     ...(process.platform === 'win32' ? { titleBarOverlay: { color: '#0c0d0e', symbolColor: '#d7dce5', height: 44 } } : {}),
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false },
   });
+  win.once('ready-to-show', () => {
+    if (ws.isMaximized) win.maximize();
+    win.show();
+  });
+  const saveWinState = () => {
+    const isMaximized = win.isMaximized();
+    const bounds = isMaximized ? win.getNormalBounds() : win.getBounds();
+    void fs.writeFile(windowStatePath(), JSON.stringify({ ...bounds, isMaximized }), 'utf8').catch((err) => void err);
+  };
+  win.on('resize', saveWinState);
+  win.on('move', saveWinState);
+  win.on('close', saveWinState);
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+    return { action: 'deny' };
+  });
   if (process.env.VITE_DEV_SERVER_URL) win.loadURL(process.env.VITE_DEV_SERVER_URL); else win.loadFile(path.join(__dirname, '../dist/index.html'));
+  return win;
 }
 if (process.versions.electron && typeof ipcMain?.handle === 'function') {
-  app.whenReady().then(() => { Menu.setApplicationMenu(null); createWindow(); app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); }); }).catch(() => app.quit());
-  app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+  if (process.platform === 'win32') app.setAppUserModelId('dev.osien.probe');
+  const gotLock = app.requestSingleInstanceLock();
+  if (!gotLock) {
+    app.quit();
+  } else {
+    app.on('second-instance', () => {
+      const win = BrowserWindow.getAllWindows()[0];
+      if (!win) return;
+      if (win.isMinimized()) win.restore();
+      win.focus();
+    });
+    app.whenReady().then(async () => {
+      Menu.setApplicationMenu(null);
+      const ws = await readWindowState();
+      createWindow(ws);
+      app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) void readWindowState().then(createWindow); });
+    }).catch(() => app.quit());
+    app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+  }
 }
 // IPC handlers remain registered only in the app process; tests call scanProjectRoot directly.
 ipc('pick-folder', async () => { const result = await dialog.showOpenDialog({ properties: ['openDirectory'] }); return result.canceled ? null : result.filePaths[0]; });
