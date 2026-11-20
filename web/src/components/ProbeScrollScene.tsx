@@ -126,13 +126,17 @@ export function ProbeScrollScene({ dimmed = false, onProgress, onReady }: ProbeS
     renderer.toneMappingExposure = 1.12;
     host.appendChild(renderer.domElement);
 
-    // Full RoomEnvironment PBR reflections on ultra & balanced hardware; skipped only on eco/software GPUs
+    // Apply RoomEnvironment PBR reflections asynchronously on an idle frame so boot TBT stays ~0ms
     let envRT: THREE.WebGLRenderTarget | null = null;
+    let envTimer = 0;
     if (quality.tier !== 'eco') {
-      const pmrem = new THREE.PMREMGenerator(renderer);
-      envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
-      scene.environment = envRT.texture;
-      pmrem.dispose();
+      envTimer = window.setTimeout(() => {
+        if (disposed) return;
+        const pmrem = new THREE.PMREMGenerator(renderer);
+        envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
+        scene.environment = envRT.texture;
+        pmrem.dispose();
+      }, 120);
     }
 
     // 60% Black / 30% White / 10% Electric Lime Studio Lighting
@@ -267,9 +271,7 @@ export function ProbeScrollScene({ dimmed = false, onProgress, onReady }: ProbeS
         model.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
         modelFloat.add(model);
 
-        // Pre-compile WebGL shaders & render one warm-up frame before signaling ready
-        renderer.compile(scene, camera);
-        renderer.render(scene, camera);
+        // Signal ready on next frame without blocking the main thread synchronously
         modelLoaded = true;
         onProgressRef.current?.(100);
         if (!readyNotified) {
@@ -403,6 +405,7 @@ export function ProbeScrollScene({ dimmed = false, onProgress, onReady }: ProbeS
 
     return () => {
       disposed = true;
+      window.clearTimeout(envTimer);
       cancelAnimationFrame(rafId);
       window.removeEventListener('scroll', updateScrollTarget);
       window.removeEventListener('pointermove', onPointerMove);

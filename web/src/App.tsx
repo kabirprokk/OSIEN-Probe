@@ -19,9 +19,15 @@ import { AuditPreview } from './components/AuditPreview';
 import { SpotlightCard } from './components/SpotlightCard';
 import { OsienWaveScroll } from './components/OsienWaveScroll';
 import { DiamondCursor } from './components/DiamondCursor';
-import { LaunchLoader } from './components/LaunchLoader';
-import { BlackHoleTransition } from './components/BlackHoleTransition';
 import { getDeviceQualityProfile } from './lib/deviceProfile';
+const LaunchLoader = lazy(async () => {
+  const m = await import('./components/LaunchLoader');
+  return { default: m.LaunchLoader };
+});
+const BlackHoleTransition = lazy(async () => {
+  const m = await import('./components/BlackHoleTransition');
+  return { default: m.BlackHoleTransition };
+});
 const DecryptedText = lazy(() => import('./components/DecryptedText'));
 
 const ProbeScrollScene = lazy(async () => {
