@@ -81,10 +81,11 @@ export default function App() {
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
   const [showTopBtn, setShowTopBtn] = useState(false);
 
-  // Real background preload state (skip blocking overlay for reduced-motion or automated audits)
+  // Skip blocking fullscreen preloader on mobile/reduced-motion/audit viewports for instant LCP
   const skipPreloader =
     typeof window !== 'undefined' &&
-    (window.matchMedia('(prefers-reduced-motion: reduce)').matches ||
+    (window.innerWidth < 768 ||
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches ||
       navigator.webdriver === true ||
       /Lighthouse|Chrome-Lighthouse|PageSpeed/i.test(navigator.userAgent));
 
@@ -187,7 +188,9 @@ export default function App() {
         };
         rafId = requestAnimationFrame(raf);
       })
-      .catch(() => null);
+      .catch(() => {
+        lenisInstance = null;
+      });
 
     return () => {
       alive = false;
@@ -271,13 +274,19 @@ export default function App() {
   return (
     <div className="page-shell">
       {!loaderDone && (
-        <LaunchLoader
-          realProgress={realLoadProgress}
-          sceneReady={sceneReady}
-          onComplete={() => setLoaderDone(true)}
-        />
+        <Suspense fallback={null}>
+          <LaunchLoader
+            realProgress={realLoadProgress}
+            sceneReady={sceneReady}
+            onComplete={() => setLoaderDone(true)}
+          />
+        </Suspense>
       )}
-      <BlackHoleTransition active={transitioning} destination={transitionDest} />
+      {transitioning && (
+        <Suspense fallback={null}>
+          <BlackHoleTransition active={transitioning} destination={transitionDest} />
+        </Suspense>
+      )}
       <DiamondCursor />
       {mountHeavy3D && <OsienWaveScroll />}
       {mountHeavy3D && (

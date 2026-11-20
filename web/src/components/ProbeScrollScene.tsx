@@ -2,7 +2,6 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
 interface ScrollKeyframe {
   t: number;
@@ -115,33 +114,27 @@ export function ProbeScrollScene({ dimmed = false, onProgress, onReady }: ProbeS
       alpha: true,
       powerPreference: 'high-performance',
     });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.setSize(width, height);
     renderer.setClearColor(0x000000, 0);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.1;
+    renderer.toneMappingExposure = 1.18;
     host.appendChild(renderer.domElement);
 
-    // Procedural studio reflections (zero external HDRI requests)
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    const envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
-    scene.environment = envRT.texture;
-    pmrem.dispose();
-
-    // 60% Black / 30% White / 10% Electric Lime Studio Lighting
-    const hemi = new THREE.HemisphereLight('#ffffff', '#050505', 0.65);
+    // Zero-PMREM-overhead crisp 60% Black / 30% White / 10% Electric Lime Studio Lighting
+    const hemi = new THREE.HemisphereLight('#ffffff', '#0c0c0c', 1.1);
     scene.add(hemi);
 
-    const keyLight = new THREE.DirectionalLight('#ffffff', 2.45);
+    const keyLight = new THREE.DirectionalLight('#ffffff', 2.8);
     keyLight.position.set(6, 7, 6);
     scene.add(keyLight);
 
-    const limeRim = new THREE.DirectionalLight('#a3ff12', 2.6);
+    const limeRim = new THREE.DirectionalLight('#a3ff12', 2.9);
     limeRim.position.set(-7, 2.5, -4.5);
     scene.add(limeRim);
 
-    const fillLight = new THREE.DirectionalLight('#e4e4e4', 0.9);
+    const fillLight = new THREE.DirectionalLight('#e8e8e8', 1.25);
     fillLight.position.set(-3, -4, 4);
     scene.add(fillLight);
 
@@ -382,7 +375,6 @@ export function ProbeScrollScene({ dimmed = false, onProgress, onReady }: ProbeS
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('resize', onResize);
       dracoLoader.dispose();
-      envRT.dispose();
       starGeo.dispose();
       starMat.dispose();
       orbitGeo.dispose();
