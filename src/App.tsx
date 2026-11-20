@@ -1054,6 +1054,25 @@ function App() {
         <span>Apply this config to your server, CDN, or framework</span>
         <div className="export-actions">
           <button className="filter-button" onClick={() => setWebFixPack(null)}>Close</button>
+          <button className="filter-button" onClick={() => {
+            const filenames: Record<string, string> = {
+              nginx: 'osien-security-headers.conf',
+              apache: '.htaccess',
+              express: 'security-headers.js',
+              nextjs: 'next.config.mjs',
+              vercel: 'vercel.json',
+              cloudflare: 'worker.js',
+            }
+            const blob = new Blob([webFixPack.configs[webFixPlatform]], { type: 'text/plain;charset=utf-8' })
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = filenames[webFixPlatform] || 'security-config.txt'
+            a.click()
+            URL.revokeObjectURL(url)
+          }}>
+            <Download size={13}/> Save Config
+          </button>
           <button className="primary" onClick={async () => { try { await navigator.clipboard.writeText(webFixPack.configs[webFixPlatform]); setWebFixCopied(true); setTimeout(() => setWebFixCopied(false), 1800) } catch { /* ignore */ } }}>
             {webFixCopied ? 'Copied!' : 'Copy Fix Config'}
           </button>

@@ -236,7 +236,12 @@ ipc('scan-project', async (_event, id) => {
   const isLive = Boolean(project.isLiveUrl || /^https?:\/\//i.test(project.root));
   let result;
   if (isLive) {
-    const webRes = await scanLiveUrl(project.root, { bugsOnly: true });
+    const webRes = await scanLiveUrl(project.root, {
+      bugsOnly: true,
+      probeCorsReflection: true,
+      probeExposedFiles: true,
+      crawlPages: 3,
+    });
     result = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       root: webRes.root,

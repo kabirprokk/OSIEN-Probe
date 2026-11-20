@@ -17,6 +17,8 @@ function getAstGrep() {
       php: require('@ast-grep/lang-php'),
       ruby: require('@ast-grep/lang-ruby'),
       kotlin: require('@ast-grep/lang-kotlin'),
+      cpp: require('@ast-grep/lang-cpp'),
+      swift: require('@ast-grep/lang-swift'),
     });
     astGrep = { parse };
   } catch {
@@ -467,6 +469,14 @@ const RB_SINK_RE = /\b(?:system|exec|eval|instance_eval|find_by_sql|Marshal\.loa
 const KT_SOURCE_RE = /\b(?:call\.parameters\[|call\.request\.queryParameters|intent\.getStringExtra|@RequestParam|@PathVariable)/;
 const KT_SANITIZER_RE = /\.toIntOrNull\s*\(|\.toLongOrNull\s*\(|Paths\.get\([^)]*\)\.fileName/;
 const KT_SINK_RE = /\b(?:executeQuery|createNativeQuery|Runtime\.getRuntime\(\)\.exec|ProcessBuilder|webView\.loadUrl)\b/;
+
+const CPP_SOURCE_RE = /\b(?:getenv\s*\(|argv\[|fgets\s*\(|recv\s*\(|req\.getParameter)/;
+const CPP_SANITIZER_RE = /\b(?:atoi\s*\(|strtol\s*\(|snprintf\s*\()/;
+const CPP_SINK_RE = /\b(?:system\s*\(|popen\s*\(|strcpy\s*\(|sprintf\s*\(|sqlite3_exec\s*\()/;
+
+const SWIFT_SOURCE_RE = /\b(?:req\.query\[|req\.parameters\.get|URLComponents\(|ProcessInfo\.processInfo\.arguments)/;
+const SWIFT_SANITIZER_RE = /\b(?:Int\(|URL\(fileURLWithPath:[^)]*\)\.lastPathComponent)/;
+const SWIFT_SINK_RE = /\b(?:Process\(\)|sqlite3_exec|eval\(|loadHTMLString)\b/;
 const PHP_SANITIZER_RE = /\b(?:intval|floatval|escapeshellarg|htmlspecialchars|basename)\s*\(/;
 const PHP_SINK_RE = /\b(?:mysqli_query|mysql_query|pg_query|shell_exec|exec|system|passthru|unserialize|eval)\s*\(/;
 
@@ -555,7 +565,33 @@ const LANG_CG_SPEC = {
     hint: (fnName, sinkMeta) => `Use parameterized queries or validate input before calling "${fnName}()" (${sinkMeta.file}:${sinkMeta.line}).`,
     title: (fnName, sinkMeta) => `Cross-file taint: untrusted input passed to "${fnName}()" (${sinkMeta.file}:${sinkMeta.line})`,
   },
+  '.cpp': {
+    lang: 'cpp',
+    fnKinds: ['function_definition'],
+    assignKinds: ['declaration', 'assignment_expression'],
+    callKinds: ['call_expression'],
+    sourceRe: CPP_SOURCE_RE,
+    sanitizerRe: CPP_SANITIZER_RE,
+    sinkRe: CPP_SINK_RE,
+    ruleId: 'cpp-crossfile-taint',
+    hint: (fnName, sinkMeta) => `Validate bounds and avoid system()/strcpy() before calling "${fnName}()" (${sinkMeta.file}:${sinkMeta.line}).`,
+    title: (fnName, sinkMeta) => `Cross-file taint: untrusted input passed to "${fnName}()" (${sinkMeta.file}:${sinkMeta.line})`,
+  },
+  '.swift': {
+    lang: 'swift',
+    fnKinds: ['function_declaration'],
+    assignKinds: ['property_declaration', 'directly_assignable_expression'],
+    callKinds: ['call_expression'],
+    sourceRe: SWIFT_SOURCE_RE,
+    sanitizerRe: SWIFT_SANITIZER_RE,
+    sinkRe: SWIFT_SINK_RE,
+    ruleId: 'swift-crossfile-taint',
+    hint: (fnName, sinkMeta) => `Sanitize input before calling "${fnName}()" (${sinkMeta.file}:${sinkMeta.line}).`,
+    title: (fnName, sinkMeta) => `Cross-file taint: untrusted input passed to "${fnName}()" (${sinkMeta.file}:${sinkMeta.line})`,
+  },
 };
+LANG_CG_SPEC['.c'] = LANG_CG_SPEC['.cpp'];
+LANG_CG_SPEC['.cc'] = LANG_CG_SPEC['.cpp'];
 
 function parseFnSignature(fnText, extName) {
   if (extName === '.py') {
@@ -617,6 +653,22 @@ function parseFnSignature(fnText, extName) {
       .filter((p) => /^[A-Za-z_]\w*$/.test(p));
     return { fnName: m[1], params };
   }
+  if (extName === '.cpp' || extName === '.c' || extName === '.cc') {
+    const m = fnText.match(/^(?:(?:static|inline|extern|virtual|const)\s+){0,4}[A-Za-z_][\w:*&\s]*\s+\*?([A-Za-z_]\w*)\s*\(([^)]*)\)/);
+    if (!m) return null;
+    const params = m[2].split(',')
+      .map((p) => p.trim().replace(/[*&]/g, ' ').split(/\s+/).pop() || '')
+      .filter((p) => /^[A-Za-z_]\w*$/.test(p) && p !== 'void');
+    return { fnName: m[1], params };
+  }
+  if (extName === '.swift') {
+    const m = fnText.match(/^(?:(?:public|private|internal|open|static)\s+){0,4}func\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/);
+    if (!m) return null;
+    const params = m[2].split(',')
+      .map((p) => p.trim().split(':')[0].trim().split(/\s+/).pop() || '')
+      .filter((p) => /^[A-Za-z_]\w*$/.test(p) && p !== '_');
+    return { fnName: m[1], params };
+  }
   return null;
 }
 
@@ -646,17 +698,18 @@ function splitCallArgs(callText) {
 function parseAssignPair(text, extName) {
   let clean = text.trim();
   if (extName === '.rs') clean = clean.replace(/^let\s+(?:mut\s+)?/, '').replace(/;$/, '');
-  if (extName === '.java' || extName === '.php') clean = clean.replace(/;$/, '');
+  if (extName === '.java' || extName === '.php' || extName === '.cpp' || extName === '.c' || extName === '.cc') clean = clean.replace(/;$/, '');
   if (extName === '.kt') clean = clean.replace(/^(?:val|var)\s+/, '');
+  if (extName === '.swift') clean = clean.replace(/^(?:let|var)\s+/, '');
   const sep = extName === '.go' && clean.includes(':=') ? ':=' : '=';
   const idx = clean.indexOf(sep);
   if (idx < 0) return null;
   const lhsRaw = clean.slice(0, idx).trim();
-  const lhs = extName === '.java'
-    ? (lhsRaw.split(/\s+/).pop() || '')
+  const lhs = (extName === '.java' || extName === '.cpp' || extName === '.c' || extName === '.cc')
+    ? (lhsRaw.replace(/[*&]/g, ' ').trim().split(/\s+/).pop() || '')
     : extName === '.php'
       ? (lhsRaw.match(/\$([A-Za-z_]\w*)/)?.[1] || '')
-      : extName === '.kt'
+      : (extName === '.kt' || extName === '.swift')
         ? lhsRaw.split(':')[0].trim()
         : lhsRaw.split(/[\s,]+/)[0];
   const rhs = clean.slice(idx + sep.length).trim();

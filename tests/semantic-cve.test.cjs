@@ -689,3 +689,36 @@ test('Ruby/Kotlin AST call graphs and Live Web Auditor multi-page crawl & CORS r
     await new Promise((resolve) => srv.close(resolve));
   }
 });
+
+test('C/C++ and Swift AST-backed interprocedural call-graph taint detection', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-v105-'));
+
+  await fs.writeFile(path.join(dir, 'exec.cpp'), [
+    'void runShell(char* cmd) {',
+    '  system(cmd);',
+    '}',
+  ].join('\n'));
+  await fs.writeFile(path.join(dir, 'main.cpp'), [
+    'void handleRequest() {',
+    '  char* input = getenv("USER_CMD");',
+    '  runShell(input);',
+    '}',
+  ].join('\n'));
+
+  await fs.writeFile(path.join(dir, 'db.swift'), [
+    'func execSql(q: String) {',
+    '  sqlite3_exec(db, q, nil, nil, nil)',
+    '}',
+  ].join('\n'));
+  await fs.writeFile(path.join(dir, 'routes.swift'), [
+    'func handle(req: Request) {',
+    '  let id = req.query["id"]',
+    '  execSql(id)',
+    '}',
+  ].join('\n'));
+
+  const report = await scanProjectRoot(dir, 'Software', { bugsOnly: true });
+  const ids = new Set(report.findings.map((f) => f.ruleId));
+  assert.ok(ids.has('cpp-crossfile-taint'), 'detects C/C++ AST call-graph cross-file taint');
+  assert.ok(ids.has('swift-crossfile-taint'), 'detects Swift AST call-graph cross-file taint');
+});
