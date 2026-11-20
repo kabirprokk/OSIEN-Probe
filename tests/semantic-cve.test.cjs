@@ -564,3 +564,58 @@ test('Minified JS skip, CFG loop-shadowing/short-circuit guard, and multi-line G
   assert.ok(report.findings.some((f) => f.ruleId === 'go-taint-sink'), 'catches multi-line Go AST taint');
   assert.ok(report.findings.some((f) => f.ruleId === 'rust-cmd-shell-taint' || f.ruleId === 'polyglot-rust-shell'), 'catches multi-line Rust AST shell taint');
 });
+
+test('Java/PHP AST call graphs, CFG compound || early-return narrowing, and TLS inspector', async () => {
+  const { inspectTlsCertificate } = require('../electron/web-auditor.cjs');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-cycle4-'));
+
+  // 1. Java cross-file taint: Controller.java -> Dao.java
+  await fs.writeFile(path.join(dir, 'Dao.java'), [
+    'class Dao {',
+    '  void findByName(String q) {',
+    '    stmt.executeQuery("SELECT * FROM users WHERE name = " + q);',
+    '  }',
+    '}',
+  ].join('\n'));
+  await fs.writeFile(path.join(dir, 'Controller.java'), [
+    'class Controller {',
+    '  void handle(HttpServletRequest request, Dao dao) {',
+    '    String user = request.getParameter("user");',
+    '    dao.findByName(user);',
+    '  }',
+    '}',
+  ].join('\n'));
+
+  // 2. PHP cross-file taint: route.php -> db.php
+  await fs.writeFile(path.join(dir, 'db.php'), [
+    '<?php',
+    'function runLookup($id) {',
+    '  mysqli_query($conn, "SELECT * FROM users WHERE id = " . $id);',
+    '}',
+  ].join('\n'));
+  await fs.writeFile(path.join(dir, 'route.php'), [
+    '<?php',
+    'function endpoint() {',
+    '  $id = $_GET["id"];',
+    '  runLookup($id);',
+    '}',
+  ].join('\n'));
+
+  // 3. CFG compound || early-return narrowing should NOT flag a or b after `if (!a || !b) return;`
+  await fs.writeFile(path.join(dir, 'narrow.ts'), [
+    'export function processPair(a?: { id: string } | null, b?: { name: string } | null) {',
+    '  if (!a || !b) return "";',
+    '  return a.id + ":" + b.name;',
+    '}',
+  ].join('\n'));
+
+  const report = await scanProjectRoot(dir, 'API / backend', { bugsOnly: true });
+  const ids = new Set(report.findings.map((f) => f.ruleId));
+  assert.ok(ids.has('java-crossfile-taint'), 'detects Java AST call-graph cross-file taint');
+  assert.ok(ids.has('php-crossfile-taint'), 'detects PHP AST call-graph cross-file taint');
+  assert.ok(!report.findings.some((f) => f.file === 'narrow.ts' && f.ruleId === 'cfg-null-deref'), 'narrows both vars in `if (!a || !b) return;`');
+
+  // 4. TLS inspector returns [] gracefully on http://
+  const nonTls = await inspectTlsCertificate('http://127.0.0.1:80/');
+  assert.deepEqual(nonTls, []);
+});

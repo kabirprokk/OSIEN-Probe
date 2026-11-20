@@ -224,11 +224,21 @@ function parseNullTest(testNode) {
   }
   if (testNode.type === 'LogicalExpression' && testNode.operator === '||') {
     const left = parseNullTest(testNode.left);
-    if (left && left.isNullWhenTrue) return { name: left.name, isNullWhenTrue: true, compoundOr: true };
+    const right = parseNullTest(testNode.right);
+    if (left && left.isNullWhenTrue) {
+      const names = [left.name, ...(left.names || [])];
+      if (right && right.isNullWhenTrue) names.push(right.name, ...(right.names || []));
+      return { name: left.name, names: [...new Set(names)], isNullWhenTrue: true, compoundOr: true };
+    }
   }
   if (testNode.type === 'LogicalExpression' && testNode.operator === '&&') {
     const left = parseNullTest(testNode.left);
-    if (left && !left.isNullWhenTrue) return { name: left.name, isNullWhenTrue: false, compoundAnd: true };
+    const right = parseNullTest(testNode.right);
+    if (left && !left.isNullWhenTrue) {
+      const names = [left.name, ...(left.names || [])];
+      if (right && !right.isNullWhenTrue) names.push(right.name, ...(right.names || []));
+      return { name: left.name, names: [...new Set(names)], isNullWhenTrue: false, compoundAnd: true };
+    }
   }
   return null;
 }
@@ -236,12 +246,16 @@ function parseNullTest(testNode) {
 function applyGuard(env, guard, truthy) {
   if (!guard) return env;
   const next = cloneEnv(env);
+  const targets = guard.names && guard.names.length ? guard.names : [guard.name];
   if (truthy) {
     if (guard.isNullWhenTrue && !guard.compoundOr) next.set(guard.name, STATE_NULLISH);
-    else if (!guard.isNullWhenTrue) next.set(guard.name, STATE_NON_NULL);
+    else if (!guard.isNullWhenTrue) {
+      for (const n of targets) next.set(n, STATE_NON_NULL);
+    }
   } else {
-    if (guard.isNullWhenTrue) next.set(guard.name, STATE_NON_NULL);
-    else if (!guard.compoundAnd) next.set(guard.name, STATE_NULLISH);
+    if (guard.isNullWhenTrue) {
+      for (const n of targets) next.set(n, STATE_NON_NULL);
+    } else if (!guard.compoundAnd) next.set(guard.name, STATE_NULLISH);
   }
   return next;
 }

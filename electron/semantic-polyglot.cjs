@@ -1,8 +1,8 @@
 'use strict';
 
-// Semantic security analyzers for Solidity (.sol), Python (.py), Go (.go), and Rust (.rs):
+// Semantic security analyzers for Solidity (.sol), Python (.py), Go (.go), Rust (.rs), Java (.java), and PHP (.php):
 //  - Solidity Checks-Effects-Interactions (reentrancy), unprotected init/delegatecall, tx.origin, unchecked call
-//  - Python, Go & Rust AST-backed intraprocedural AND interprocedural call-graph taint into SQL / shell / path sinks
+//  - Python, Go, Rust, Java & PHP AST-backed intraprocedural AND interprocedural call-graph taint into SQL / shell / path sinks
 
 let astGrep = null;
 function getAstGrep() {
@@ -13,6 +13,8 @@ function getAstGrep() {
       python: require('@ast-grep/lang-python'),
       go: require('@ast-grep/lang-go'),
       rust: require('@ast-grep/lang-rust'),
+      java: require('@ast-grep/lang-java'),
+      php: require('@ast-grep/lang-php'),
     });
     astGrep = { parse };
   } catch {
@@ -451,6 +453,14 @@ const RS_SOURCE_RE = /\b(?:web::(?:Query|Path|Json)|Query<|Path<|Json<|req\.(?:q
 const RS_SANITIZER_RE = /\b(?:\.parse::<(?:i32|i64|u32|u64|usize|bool)>|Path::new\([^)]*\)\.file_name)/;
 const RS_SINK_RE = /\b(?:sqlx::query\s*\(\s*&?format!|Command::new\s*\(\s*"(?:sh|bash)"\s*\)\s*\.arg\s*\(\s*"-c")/;
 
+const JAVA_SOURCE_RE = /\b(?:request\.getParameter|request\.getHeader|request\.getQueryString|@RequestParam|@PathVariable|@RequestBody)/;
+const JAVA_SANITIZER_RE = /\b(?:Integer\.parseInt|Long\.parseLong|Paths\.get\([^)]*\)\.getFileName|ESAPI\.)/;
+const JAVA_SINK_RE = /\b(?:executeQuery|executeUpdate|createNativeQuery|Runtime\.getRuntime\(\)\.exec|new\s+ProcessBuilder|Files\.readString)\b/;
+
+const PHP_SOURCE_RE = /\$_(?:GET|POST|REQUEST|COOKIE|SERVER)\b/;
+const PHP_SANITIZER_RE = /\b(?:intval|floatval|escapeshellarg|htmlspecialchars|basename)\s*\(/;
+const PHP_SINK_RE = /\b(?:mysqli_query|mysql_query|pg_query|shell_exec|exec|system|passthru|unserialize|eval)\s*\(/;
+
 const LANG_CG_SPEC = {
   '.py': {
     lang: 'python',
@@ -488,6 +498,30 @@ const LANG_CG_SPEC = {
     hint: (fnName, sinkMeta) => `Use bound parameters or avoid shell -c before calling "${fnName}()" (${sinkMeta.file}:${sinkMeta.line}).`,
     title: (fnName, sinkMeta) => `Cross-file taint: untrusted input passed to "${fnName}()" (${sinkMeta.file}:${sinkMeta.line})`,
   },
+  '.java': {
+    lang: 'java',
+    fnKinds: ['method_declaration'],
+    assignKinds: ['local_variable_declaration', 'assignment_expression'],
+    callKinds: ['method_invocation'],
+    sourceRe: JAVA_SOURCE_RE,
+    sanitizerRe: JAVA_SANITIZER_RE,
+    sinkRe: JAVA_SINK_RE,
+    ruleId: 'java-crossfile-taint',
+    hint: (fnName, sinkMeta) => `Use PreparedStatement or validate input before calling "${fnName}()" (${sinkMeta.file}:${sinkMeta.line}).`,
+    title: (fnName, sinkMeta) => `Cross-file taint: HTTP input passed to "${fnName}()" (${sinkMeta.file}:${sinkMeta.line})`,
+  },
+  '.php': {
+    lang: 'php',
+    fnKinds: ['function_definition', 'method_declaration'],
+    assignKinds: ['assignment_expression'],
+    callKinds: ['function_call_expression', 'member_call_expression'],
+    sourceRe: PHP_SOURCE_RE,
+    sanitizerRe: PHP_SANITIZER_RE,
+    sinkRe: PHP_SINK_RE,
+    ruleId: 'php-crossfile-taint',
+    hint: (fnName, sinkMeta) => `Use PDO prepared statements or escapeshellarg() before calling "${fnName}()" (${sinkMeta.file}:${sinkMeta.line}).`,
+    title: (fnName, sinkMeta) => `Cross-file taint: superglobal input passed to "${fnName}()" (${sinkMeta.file}:${sinkMeta.line})`,
+  },
 };
 
 function parseFnSignature(fnText, extName) {
@@ -513,6 +547,25 @@ function parseFnSignature(fnText, extName) {
     const params = m[2].split(',')
       .map((p) => p.trim().split(':')[0].trim().replace(/^mut\s+/, ''))
       .filter((p) => /^[A-Za-z_]\w*$/.test(p) && p !== 'self');
+    return { fnName: m[1], params };
+  }
+  if (extName === '.java') {
+    const m = fnText.match(/^(?:(?:public|private|protected|static|final|synchronized)\s+)*[A-Za-z_][\w<>[\],\s]*\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/);
+    if (!m) return null;
+    const params = m[2].split(',')
+      .map((p) => p.trim().replace(/@\w+(?:\([^)]*\))?\s*/g, '').split(/\s+/).pop() || '')
+      .filter((p) => /^[A-Za-z_]\w*$/.test(p));
+    return { fnName: m[1], params };
+  }
+  if (extName === '.php') {
+    const m = fnText.match(/^(?:(?:public|private|protected|static)\s+)*function\s+([A-Za-z_]\w*)\s*\(([^)]*)\)/);
+    if (!m) return null;
+    const params = m[2].split(',')
+      .map((p) => {
+        const vm = p.match(/\$([A-Za-z_]\w*)/);
+        return vm ? vm[1] : '';
+      })
+      .filter((p) => /^[A-Za-z_]\w*$/.test(p));
     return { fnName: m[1], params };
   }
   return null;
@@ -544,10 +597,16 @@ function splitCallArgs(callText) {
 function parseAssignPair(text, extName) {
   let clean = text.trim();
   if (extName === '.rs') clean = clean.replace(/^let\s+(?:mut\s+)?/, '').replace(/;$/, '');
+  if (extName === '.java' || extName === '.php') clean = clean.replace(/;$/, '');
   const sep = extName === '.go' && clean.includes(':=') ? ':=' : '=';
   const idx = clean.indexOf(sep);
   if (idx < 0) return null;
-  const lhs = clean.slice(0, idx).trim().split(/[\s,]+/)[0];
+  const lhsRaw = clean.slice(0, idx).trim();
+  const lhs = extName === '.java'
+    ? (lhsRaw.split(/\s+/).pop() || '')
+    : extName === '.php'
+      ? (lhsRaw.match(/\$([A-Za-z_]\w*)/)?.[1] || '')
+      : lhsRaw.split(/[\s,]+/)[0];
   const rhs = clean.slice(idx + sep.length).trim();
   if (!/^[A-Za-z_]\w*$/.test(lhs)) return null;
   return { lhs, rhs };
@@ -630,7 +689,7 @@ function buildAstCallGraph(polyglotFiles, ag) {
           }
         }
 
-        const calleeMatch = cText.match(/^(?:[A-Za-z_]\w*(?:\.|::))?([A-Za-z_]\w*)\s*\(/);
+        const calleeMatch = cText.match(/^(?:[\w$]+(?:\.|::|->))*([A-Za-z_]\w*)\s*\(/);
         if (calleeMatch) {
           const calleeName = calleeMatch[1];
           const args = splitCallArgs(cText);

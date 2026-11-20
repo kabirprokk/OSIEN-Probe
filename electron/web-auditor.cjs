@@ -5,6 +5,7 @@
 // and audits HTTP security headers, TLS/HSTS, cookies, server fingerprinting, CSP quality,
 // WordPress/CMS passive metadata, and HTML/inline-JS rules via scanner.cjs.
 
+const tls = require('node:tls');
 const { scanFileContent, dedupeByCweLocation, rulesForKind, scoreFor, STYLE_HINT_RULES } = require('./scanner.cjs');
 
 function makeWebFinding({ id, title, severity, cwe, hint, reason, url, excerpt }) {
@@ -296,6 +297,9 @@ async function scanLiveUrl(targetUrl, options = {}) {
 
   const finalUrl = res.url || parsed.toString();
   const headerFindings = analyzeHttpHeaders(finalUrl, res.headers);
+  const tlsFindings = finalUrl.startsWith('https://')
+    ? await inspectTlsCertificate(finalUrl, Math.min(options.timeoutMs || 5000, 5000))
+    : [];
   const exposedFindings = options.probeExposedFiles ? await probeExposedSensitivePaths(new URL(finalUrl).origin, options.timeoutMs || 5000) : [];
   const htmlList = [];
 
@@ -315,7 +319,7 @@ async function scanLiveUrl(targetUrl, options = {}) {
     htmlList.push(...analyzeHtmlLiveChecks(html, finalUrl));
   }
 
-  const combined = [...headerFindings, ...exposedFindings, ...(options.bugsOnly ? dedupeByCweLocation(htmlList) : htmlList)];
+  const combined = [...headerFindings, ...tlsFindings, ...exposedFindings, ...(options.bugsOnly ? dedupeByCweLocation(htmlList) : htmlList)];
   const capped = combined.slice(0, options.maxFindings || 1000);
   const severityCounts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   for (const f of capped) {
@@ -634,8 +638,98 @@ function generateWebRemediation(scanOrFindings, targetUrl = '') {
   };
 }
 
+function inspectTlsCertificate(targetUrl, timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    let parsed;
+    try { parsed = new URL(targetUrl); } catch { resolve([]); return; }
+    if (parsed.protocol !== 'https:') { resolve([]); return; }
+
+    const verifyCert = false;
+    const findings = [];
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      resolve(findings);
+    };
+
+    const socket = tls.connect({
+      host: parsed.hostname,
+      port: Number(parsed.port) || 443,
+      servername: parsed.hostname,
+      rejectUnauthorized: verifyCert,
+    }, () => {
+      try {
+        const protocol = socket.getProtocol ? socket.getProtocol() : '';
+        if (protocol === 'TLSv1' || protocol === 'TLSv1.1') {
+          findings.push(makeWebFinding({
+            id: 'web-tls-weak-protocol',
+            title: `Server negotiated deprecated TLS protocol (${protocol})`,
+            severity: 'high',
+            cwe: 'CWE-326',
+            hint: 'Disable TLS 1.0 and TLS 1.1; enforce TLS 1.2 and TLS 1.3.',
+            reason: `TLS handshake negotiated ${protocol}.`,
+            url: targetUrl,
+            excerpt: `Protocol: ${protocol}`,
+          }));
+        }
+        const cert = socket.getPeerCertificate ? socket.getPeerCertificate() : null;
+        if (cert && cert.valid_to) {
+          const expMs = Date.parse(cert.valid_to);
+          const daysLeft = Math.floor((expMs - Date.now()) / 86400000);
+          if (Number.isFinite(daysLeft) && daysLeft < 0) {
+            findings.push(makeWebFinding({
+              id: 'web-tls-expired-cert',
+              title: 'TLS certificate has expired',
+              severity: 'critical',
+              cwe: 'CWE-295',
+              hint: 'Renew the TLS certificate immediately (e.g., via Let\'s Encrypt / ACME).',
+              reason: `Certificate expired on ${cert.valid_to}.`,
+              url: targetUrl,
+              excerpt: `valid_to: ${cert.valid_to}`,
+            }));
+          } else if (Number.isFinite(daysLeft) && daysLeft <= 14) {
+            findings.push(makeWebFinding({
+              id: 'web-tls-expiring-cert',
+              title: `TLS certificate expires in ${daysLeft} day(s)`,
+              severity: 'medium',
+              cwe: 'CWE-295',
+              hint: 'Renew your TLS certificate soon or enable automated ACME renewal.',
+              reason: `Certificate expires on ${cert.valid_to}.`,
+              url: targetUrl,
+              excerpt: `valid_to: ${cert.valid_to}`,
+            }));
+          }
+        }
+        if (socket.authorized === false && socket.authorizationError && socket.authorizationError !== 'CERT_HAS_EXPIRED') {
+          findings.push(makeWebFinding({
+            id: 'web-tls-untrusted-cert',
+            title: `Untrusted TLS certificate (${socket.authorizationError})`,
+            severity: 'high',
+            cwe: 'CWE-295',
+            hint: 'Install a valid certificate chain signed by a trusted Certificate Authority.',
+            reason: `TLS verification failed: ${socket.authorizationError}.`,
+            url: targetUrl,
+            excerpt: String(socket.authorizationError),
+          }));
+        }
+      } finally {
+        socket.end();
+        done();
+      }
+    });
+
+    socket.setTimeout(timeoutMs, () => {
+      socket.destroy();
+      done();
+    });
+    socket.on('error', () => done());
+  });
+}
+
 module.exports = {
   scanLiveUrl,
   analyzeHttpHeaders,
   generateWebRemediation,
+  inspectTlsCertificate,
 };

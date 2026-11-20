@@ -835,7 +835,7 @@ async function scanProjectRoot(root, kind, options = {}) {
         if (maxLen > 2000 || raw.length / Math.max(1, raw.split(/\r?\n/).length) > 350) return null;
       }
       if (lang === 'js' && jsFiles.length < 400) jsFiles.push({ rel, raw, extName });
-      if (['.py', '.go', '.rs'].includes(extName) && polyglotFiles.length < 400) polyglotFiles.push({ rel, raw, extName });
+      if (['.py', '.go', '.rs', '.java', '.php'].includes(extName) && polyglotFiles.length < 400) polyglotFiles.push({ rel, raw, extName });
       return { lang, ...scanFileContent(raw, rel, extName, lang, catalog, applicableByLang) };
     }));
 
