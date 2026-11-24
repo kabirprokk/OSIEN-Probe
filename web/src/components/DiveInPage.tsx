@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { motion } from 'motion/react';
-import { ArrowLeft, ArrowUpRight, Compass, ExternalLink, Github, Waves } from 'lucide-react';
+import { ArrowLeft, ArrowUpRight, Compass, ExternalLink, Github } from 'lucide-react';
 import DecryptedText from './DecryptedText';
 
 interface DiveInPageProps {
@@ -164,30 +164,9 @@ const DEPTH_MARKERS = [
 
 export function DiveInPage({ onBack, onOpenDocs }: DiveInPageProps) {
   const [selectedId, setSelectedId] = useState<string>('osien-probe');
-  const [depthM, setDepthM] = useState<number>(0);
 
   const selected =
     OCEAN_PROJECTS.find((p) => p.id === selectedId) ?? OCEAN_PROJECTS[0];
-
-  useEffect(() => {
-    const onScroll = () => {
-      const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
-      const pct = Math.max(0, Math.min(1, window.scrollY / maxScroll));
-      setDepthM(Math.round(pct * 4000));
-    };
-    onScroll();
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, []);
-
-  const currentZone =
-    depthM < 350
-      ? 'SUNLIGHT ZONE'
-      : depthM < 1200
-        ? 'TWILIGHT ZONE'
-        : depthM < 2600
-          ? 'MIDNIGHT ZONE'
-          : 'ABYSSAL TRENCH';
 
   // Smooth sinuous dive cable connecting all 10 projects from surface to abyss
   const cablePath = OCEAN_PROJECTS.map((p, idx) => {
@@ -212,10 +191,6 @@ export function DiveInPage({ onBack, onOpenDocs }: DiveInPageProps) {
         </button>
 
         <div className="docs-header-actions">
-          <span className="dive-depth-pill" aria-live="polite">
-            <Waves size={12} aria-hidden="true" />
-            {depthM.toLocaleString()}m · {currentZone}
-          </span>
           <button type="button" className="docs-back-btn" onClick={onOpenDocs}>
             DOCS
           </button>
