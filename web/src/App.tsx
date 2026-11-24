@@ -43,6 +43,10 @@ const HistoryPage = lazy(async () => {
   const m = await import('./components/HistoryPage');
   return { default: m.HistoryPage };
 });
+const DiveInPage = lazy(async () => {
+  const m = await import('./components/DiveInPage');
+  return { default: m.DiveInPage };
+});
 const ASCIIText = lazy(() => import('./components/ASCIIText'));
 
 type QuickstartTab = 'cli' | 'desktop' | 'mcp';
@@ -83,12 +87,14 @@ const QUICKSTART_COMMANDS: Record<QuickstartTab, { comment: string; command: str
 const REVEAL_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
 export default function App() {
-  const [page, setPage] = useState<'home' | 'docs' | 'history'>(() =>
+  const [page, setPage] = useState<'home' | 'docs' | 'history' | 'dive'>(() =>
     window.location.hash === '#docs'
       ? 'docs'
       : window.location.hash === '#history'
         ? 'history'
-        : 'home',
+        : window.location.hash === '#dive-in'
+          ? 'dive'
+          : 'home',
   );
   const [navOpen, setNavOpen] = useState(false);
   const [qsTab, setQsTab] = useState<QuickstartTab>('cli');
@@ -226,6 +232,8 @@ export default function App() {
         setPage('docs');
       } else if (window.location.hash === '#history') {
         setPage('history');
+      } else if (window.location.hash === '#dive-in') {
+        setPage('dive');
       } else if (page !== 'home') {
         setPage('home');
       }
@@ -239,7 +247,7 @@ export default function App() {
   }, [page]);
 
   const runPageTransition = (
-    targetPage: 'home' | 'docs' | 'history',
+    targetPage: 'home' | 'docs' | 'history' | 'dive',
     label: string,
     anchor?: string,
   ) => {
@@ -253,6 +261,9 @@ export default function App() {
       setPage(targetPage);
       if (targetPage === 'docs' || targetPage === 'history') {
         window.history.pushState(null, '', `#${targetPage}`);
+        window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+      } else if (targetPage === 'dive') {
+        window.history.pushState(null, '', '#dive-in');
         window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
       } else if (anchor) {
         window.history.pushState(null, '', anchor);
@@ -279,6 +290,11 @@ export default function App() {
   const openHistory = () => {
     if (page === 'history') return;
     runPageTransition('history', 'HISTORY');
+  };
+
+  const openDiveIn = () => {
+    if (page === 'dive') return;
+    runPageTransition('dive', 'DIVE IN');
   };
 
   const openHome = (anchor?: string) => {
@@ -412,6 +428,16 @@ export default function App() {
             <SmartText text="History" priority="accent" active={mountHeavy3D} />
           </a>
           <a
+            href="#dive-in"
+            className={page === 'dive' ? 'nav-active' : ''}
+            onClick={(e) => {
+              e.preventDefault();
+              openDiveIn();
+            }}
+          >
+            <SmartText text="Dive in" priority="accent" active={mountHeavy3D} />
+          </a>
+          <a
             href="#docs"
             className={page === 'docs' ? 'nav-active' : ''}
             onClick={(e) => {
@@ -441,6 +467,10 @@ export default function App() {
         ) : page === 'history' ? (
           <Suspense fallback={null}>
             <HistoryPage onBack={() => openHome()} onOpenDocs={openDocs} />
+          </Suspense>
+        ) : page === 'dive' ? (
+          <Suspense fallback={null}>
+            <DiveInPage onBack={() => openHome()} onOpenDocs={openDocs} />
           </Suspense>
         ) : (
           <>
@@ -892,6 +922,15 @@ export default function App() {
           </a>
 
           <div className="footer-mono-links footer-mono-inline">
+            <a
+              href="#dive-in"
+              onClick={(e) => {
+                e.preventDefault();
+                openDiveIn();
+              }}
+            >
+              Dive in
+            </a>
             <a
               href="#history"
               onClick={(e) => {
