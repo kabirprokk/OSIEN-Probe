@@ -87,13 +87,13 @@ const QUICKSTART_COMMANDS: Record<QuickstartTab, { comment: string; command: str
 const REVEAL_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
 export default function App() {
-  const [page, setPage] = useState<'home' | 'docs' | 'history' | 'dive'>(() =>
+  const [page, setPage] = useState<'home' | 'docs' | 'history' | 'dive-in'>(() =>
     window.location.hash === '#docs'
       ? 'docs'
       : window.location.hash === '#history'
         ? 'history'
         : window.location.hash === '#dive-in'
-          ? 'dive'
+          ? 'dive-in'
           : 'home',
   );
   const [navOpen, setNavOpen] = useState(false);
@@ -233,7 +233,7 @@ export default function App() {
       } else if (window.location.hash === '#history') {
         setPage('history');
       } else if (window.location.hash === '#dive-in') {
-        setPage('dive');
+        setPage('dive-in');
       } else if (page !== 'home') {
         setPage('home');
       }
@@ -247,7 +247,7 @@ export default function App() {
   }, [page]);
 
   const runPageTransition = (
-    targetPage: 'home' | 'docs' | 'history' | 'dive',
+    targetPage: 'home' | 'docs' | 'history' | 'dive-in',
     label: string,
     anchor?: string,
   ) => {
@@ -259,11 +259,8 @@ export default function App() {
     // Swap page underneath once black-hole overlay is opaque
     window.setTimeout(() => {
       setPage(targetPage);
-      if (targetPage === 'docs' || targetPage === 'history') {
+      if (targetPage === 'docs' || targetPage === 'history' || targetPage === 'dive-in') {
         window.history.pushState(null, '', `#${targetPage}`);
-        window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
-      } else if (targetPage === 'dive') {
-        window.history.pushState(null, '', '#dive-in');
         window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
       } else if (anchor) {
         window.history.pushState(null, '', anchor);
@@ -293,8 +290,8 @@ export default function App() {
   };
 
   const openDiveIn = () => {
-    if (page === 'dive') return;
-    runPageTransition('dive', 'DIVE IN');
+    if (page === 'dive-in') return;
+    runPageTransition('dive-in', 'DIVE IN');
   };
 
   const openHome = (anchor?: string) => {
@@ -418,6 +415,16 @@ export default function App() {
             <SmartText text="Engine" priority="accent" active={mountHeavy3D} />
           </a>
           <a
+            href="#dive-in"
+            className={page === 'dive-in' ? 'nav-active' : ''}
+            onClick={(e) => {
+              e.preventDefault();
+              openDiveIn();
+            }}
+          >
+            <SmartText text="Dive in" priority="accent" active={mountHeavy3D} />
+          </a>
+          <a
             href="#history"
             className={page === 'history' ? 'nav-active' : ''}
             onClick={(e) => {
@@ -426,16 +433,6 @@ export default function App() {
             }}
           >
             <SmartText text="History" priority="accent" active={mountHeavy3D} />
-          </a>
-          <a
-            href="#dive-in"
-            className={page === 'dive' ? 'nav-active' : ''}
-            onClick={(e) => {
-              e.preventDefault();
-              openDiveIn();
-            }}
-          >
-            <SmartText text="Dive in" priority="accent" active={mountHeavy3D} />
           </a>
           <a
             href="#docs"
@@ -468,7 +465,7 @@ export default function App() {
           <Suspense fallback={null}>
             <HistoryPage onBack={() => openHome()} onOpenDocs={openDocs} />
           </Suspense>
-        ) : page === 'dive' ? (
+        ) : page === 'dive-in' ? (
           <Suspense fallback={null}>
             <DiveInPage onBack={() => openHome()} onOpenDocs={openDocs} />
           </Suspense>
