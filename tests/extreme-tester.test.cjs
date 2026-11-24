@@ -16,7 +16,7 @@ const {
   buildExtremeProbeScript,
 } = require('../electron/extreme-tester.cjs');
 
-test('getSystemProfile reports PC hardware tier and step budget', () => {
+test('Mensura · system hardware tier & step budget', () => {
   const profile = getSystemProfile();
   assert.ok(profile.cpuCores >= 1);
   assert.ok(profile.totalMemGb > 0);
@@ -25,7 +25,7 @@ test('getSystemProfile reports PC hardware tier and step budget', () => {
   assert.ok(profile.stepDelayMs >= 140);
 });
 
-test('detectWebEntry detects npm dev script and static index.html fallback', async () => {
+test('Vestibulum · detects npm dev & static entry', async () => {
   const npmRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'osien-web-npm-'));
   await fs.mkdir(path.join(npmRoot, 'node_modules'));
   await fs.writeFile(path.join(npmRoot, 'package.json'), JSON.stringify({ name: 'site', scripts: { dev: 'vite' } }));
@@ -40,7 +40,7 @@ test('detectWebEntry detects npm dev script and static index.html fallback', asy
   assert.equal(staticEntry.entryFile, 'index.html');
 });
 
-test('startStaticSandboxServer serves local HTML on 127.0.0.1 and shuts down cleanly', async () => {
+test('Portus · static sandbox server on 127.0.0.1', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'osien-sandbox-srv-'));
   await fs.writeFile(path.join(root, 'index.html'), '<!doctype html><h1>Sandbox OK</h1>');
   const srv = await startStaticSandboxServer(root);
@@ -60,14 +60,14 @@ test('startStaticSandboxServer serves local HTML on 127.0.0.1 and shuts down cle
   }
 });
 
-test('buildExtremeProbeScript produces valid executable probe script', () => {
+test('Hasta · builds executable extreme probe script', () => {
   const src = buildExtremeProbeScript(3);
   assert.match(src, /__osien_probe_cursor__/);
   assert.match(src, /data-osien-xss-probe/);
   assert.doesNotThrow(() => new Function(src));
 });
 
-test('startNpmSandboxServer spawns npm script without EINVAL and strips ANSI URL output', async () => {
+test('Navis · npm sandbox server spawn & ANSI strip', async () => {
   assert.equal(stripAnsi('\x1b[36mhttp://localhost:\x1b[1m5173/\x1b[22m\x1b[39m'), 'http://localhost:5173/');
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'osien-npm-srv-'));
   await fs.writeFile(path.join(root, 'server.js'), `

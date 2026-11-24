@@ -24,7 +24,7 @@ async function scanClean(files, kind = 'Software') {
   }
 }
 
-test('clean modern Kotlin, Jetpack Compose, and AndroidManifest produce zero critical/high/medium false positives', async () => {
+test('Pura I · clean Kotlin & Compose zero false positives', async () => {
   const result = await scanClean({
     'app/src/main/AndroidManifest.xml': [
       '<manifest>',
@@ -54,7 +54,7 @@ test('clean modern Kotlin, Jetpack Compose, and AndroidManifest produce zero cri
   assert.deepEqual(serious, [], `Unexpected serious findings: ${JSON.stringify(serious)}`);
 });
 
-test('clean modern Node/Express, Firestore, Promise chains, and tests produce zero critical/high/medium false positives', async () => {
+test('Pura II · clean Node/Express & Firestore zero false positives', async () => {
   const result = await scanClean({
     'src/service.js': [
       "'use strict';",
@@ -88,7 +88,7 @@ test('clean modern Node/Express, Firestore, Promise chains, and tests produce ze
   assert.deepEqual(serious, [], `Unexpected serious findings: ${JSON.stringify(serious)}`);
 });
 
-test('clean modern Python, Go, Rust, and Java produce zero critical/high/medium false positives', async () => {
+test('Pura III · clean Python, Go, Rust & Java zero false positives', async () => {
   const result = await scanClean({
     'app.py': [
       'from dataclasses import dataclass',
@@ -120,7 +120,7 @@ test('clean modern Python, Go, Rust, and Java produce zero critical/high/medium 
   assert.deepEqual(serious, [], `Unexpected serious findings: ${JSON.stringify(serious)}`);
 });
 
-test('clean modern browser ESM, Web APIs, JSON-LD, canonical links, and CSS overscroll-behavior produce zero false positives', async () => {
+test('Pura IV · clean Browser ESM & CSS zero false positives', async () => {
   const result = await scanClean({
     'index.html': [
       '<!doctype html>',
@@ -155,7 +155,7 @@ test('clean modern browser ESM, Web APIs, JSON-LD, canonical links, and CSS over
   assert.deepEqual(hits, [], `Unexpected false positives: ${JSON.stringify(hits)}`);
 });
 
-test('Web media APIs and CLI argv file reads produce zero false positives and no duplicate inline-onclick rule', async () => {
+test('Pura V · clean Web media & CLI argv zero false positives', async () => {
   const result = await scanClean({
     'index.html': '<link rel="stylesheet" href="/app.css" media="print" onload="this.media=\'all\'" />',
     'media.js': [
@@ -176,7 +176,7 @@ test('Web media APIs and CLI argv file reads produce zero false positives and no
   assert.deepEqual(hits, [], `Unexpected false positives: ${JSON.stringify(hits)}`);
 });
 
-test('noise reduction: skips CLI/test logging & sync IO, Google Fonts SRI, prose comments, cleanup catches, and caps CSS style repeats', async () => {
+test('Sirenes · noise reduction on CLI, fonts & comments', async () => {
   const result = await scanClean({
     'index.html': '<link href="https://fonts.googleapis.com/css2?family=Poppins" rel="stylesheet" />',
     'scripts/import.mjs': [

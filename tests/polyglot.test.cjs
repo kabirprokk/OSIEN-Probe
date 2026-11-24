@@ -19,7 +19,7 @@ async function scanFixtures(files) {
   }
 }
 
-test('language AST rules catch dangerous APIs across supported languages', async () => {
+test('Polyglotta · AST rules catch dangerous APIs', async () => {
   const result = await scanFixtures({
     'unsafe.py': 'import pickle, requests\nvalue = pickle.loads(data)\nrequests.get("https://example.com")\n',
     'unsafe.go': 'package main\nimport "os/exec"\nfunc f(cmd string) { exec.Command("sh", "-c", cmd); md5.New(); http.ListenAndServe(":8080", nil) }\n',
@@ -63,7 +63,7 @@ test('language AST rules catch dangerous APIs across supported languages', async
   assert.equal(result.findings.find((finding) => finding.ruleId === 'polyglot-java-deserialize').line, 1);
 });
 
-test('language AST rules ignore comments and honor inline suppression', async () => {
+test('Silentium · AST rules ignore comments & honor suppressions', async () => {
   const result = await scanFixtures({
     'safe.py': '# eval(user_input)\nimport json\nvalue = json.loads(data)\n',
     'safe.go': 'package main\n// exec.Command("sh", "-c", userInput)\nfunc f() {}\n',
@@ -74,7 +74,7 @@ test('language AST rules ignore comments and honor inline suppression', async ()
   assert.ok(!detected.some((ruleId) => ruleId.startsWith('polyglot-')));
 });
 
-test('reports parser-marked syntax errors without treating valid code as erroneous', async () => {
+test('Grammatica · flags syntax errors without false alarms', async () => {
   const result = await scanFixtures({
     'broken.go': 'package main\nfunc broken( {\n',
     'broken.rs': 'fn broken( {\n',

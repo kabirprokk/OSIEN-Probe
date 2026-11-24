@@ -18,6 +18,7 @@ const {
 } = require('../electron/scanner.cjs');
 const { checkAiHealth } = require('../electron/ai-review.cjs');
 const { scanLiveUrl, generateWebRemediation } = require('../electron/web-auditor.cjs');
+const { runNpcSwarmTest } = require('../electron/npc-swarm-tester.cjs');
 
 const C = {
   reset: '\x1b[0m',
@@ -45,12 +46,14 @@ function printHelp() {
 Usage:
   probe                               Launch interactive Terminal UI (all app options)
   probe scan [path] [options]         Scan a project directory
+  probe npc [url-or-path] [options]   Simulate 100+ NPC users to stress-test & find bugs
   probe rules [options]               List available rules and CWE mappings
   probe ai-status                     Check local Ollama AI review availability
   probe mcp                           Start the stdio MCP server (osien-probe-mcp)
 
 Options:
   --kind, -k <category>   Project category (${kinds.join(' | ')}) [default: Software]
+  --changed, --git-diff   Scan only Git-modified / untracked files (ultra-fast diff scan)
   --bugs-only             Filter out low-signal lint/style hints
   --json                  Output raw JSON scan report
   --sarif                 Output SARIF 2.1.0 report
@@ -71,6 +74,7 @@ function parseArgs(argv) {
     command: argv.length === 0 ? 'menu' : 'scan',
     target: '.',
     kind: 'Software',
+    changedOnly: false,
     bugsOnly: false,
     format: 'text',
     out: null,
@@ -79,6 +83,7 @@ function parseArgs(argv) {
     probeExposed: false,
     probeCors: false,
     crawlPages: 0,
+    npcs: 120,
     quiet: false,
     help: false,
     version: false,
@@ -89,9 +94,11 @@ function parseArgs(argv) {
     if (arg === '--help' || arg === '-h') opts.help = true;
     else if (arg === '--version' || arg === '-v') opts.version = true;
     else if (arg === '--bugs-only') opts.bugsOnly = true;
+    else if (arg === '--changed' || arg === '--git-diff') opts.changedOnly = true;
     else if (arg === '--probe-exposed') opts.probeExposed = true;
     else if (arg === '--probe-cors') opts.probeCors = true;
     else if (arg === '--crawl' && argv[i + 1]) opts.crawlPages = Math.max(0, Number(argv[++i]) || 0);
+    else if (arg === '--npcs' && argv[i + 1]) opts.npcs = Math.max(10, Math.min(1000, Number(argv[++i]) || 120));
     else if (arg === '--fix' || arg === '--remediate') {
       const next = argv[i + 1];
       if (next && !next.startsWith('-') && ['nginx', 'apache', 'express', 'nextjs', 'vercel', 'cloudflare', 'all'].includes(next)) {
@@ -110,7 +117,7 @@ function parseArgs(argv) {
     else if (arg === '--fail-on' && argv[i + 1]) opts.failOn = argv[++i];
     else if (!arg.startsWith('-')) positional.push(arg);
   }
-  if (['scan', 'rules', 'ai-status', 'menu', 'tui', 'ui', 'mcp'].includes(positional[0])) {
+  if (['scan', 'npc', 'rules', 'ai-status', 'menu', 'tui', 'ui', 'mcp'].includes(positional[0])) {
     const cmd = positional.shift();
     opts.command = cmd === 'tui' || cmd === 'ui' ? 'menu' : cmd;
   }
@@ -285,6 +292,26 @@ async function run() {
     await launchInteractiveCli();
     return;
   }
+  if (opts.command === 'npc') {
+    const isUrl = /^https?:\/\//i.test(opts.target);
+    const root = isUrl ? opts.target : path.resolve(opts.target);
+    const res = await runNpcSwarmTest({ id: root, name: path.basename(root) || root, root }, { npcCount: opts.npcs });
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(res, null, 2));
+    } else {
+      console.log(`OSIEN Probe v${pkg.version} — NPC Swarm Test (${res.npcCount} NPCs)`);
+      console.log(`Target:   ${res.targetUrl}`);
+      console.log(`Requests: ${res.stats.totalRequests} (${res.stats.rps} req/s) · Duration: ${res.durationMs}ms`);
+      console.log(`Status:   2xx/3xx=${res.stats.ok2xx3xx} 4xx=${res.stats.status4xx} 429=${res.stats.status429} 5xx=${res.stats.status5xx} timeouts=${res.stats.timeouts}`);
+      console.log(`Latency:  p50=${res.stats.p50Ms}ms p95=${res.stats.p95Ms}ms p99=${res.stats.p99Ms}ms`);
+      console.log(`Findings: ${res.findings.length}`);
+      for (const f of res.findings) {
+        console.log(`  [${f.severity.toUpperCase()}] ${f.title} (${f.ruleId}) — ${f.file}`);
+        if (f.hint) console.log(`      ${f.hint}`);
+      }
+    }
+    return;
+  }
   if (opts.command === 'mcp') {
     const mcpEntry = path.resolve(__dirname, 'osien-probe-mcp.cjs');
     const child = spawn(process.execPath, [mcpEntry], { stdio: 'inherit' });
@@ -326,7 +353,7 @@ async function run() {
       probeCorsReflection: opts.probeCors,
       crawlPages: opts.crawlPages,
     })
-    : await scanProjectRoot(root, opts.kind, { bugsOnly: opts.bugsOnly });
+    : await scanProjectRoot(root, opts.kind, { bugsOnly: opts.bugsOnly, changedOnly: opts.changedOnly });
   if (isLiveUrl && opts.fix) {
     result.remediation = generateWebRemediation(result, root);
   }

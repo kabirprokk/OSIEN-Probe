@@ -3,12 +3,13 @@ import { Activity, ArrowUpRight, Bug, Check, ChevronDown, CircleHelp, Code2, Dow
 import './App.css'
 import './Working.css'
 import './UIOverrides.css'
+import { BalloonGame } from './BalloonGame'
 
 type Kind = 'Website' | 'Software' | 'API / backend' | 'Mobile app' | 'Library' | 'Data / ML' | 'Cloud / DevOps' | 'Blockchain / Web3' | 'Desktop / Electron' | 'CLI / Automation'
 type AiAssessment = { verdict: 'likely_real' | 'likely_false_positive' | 'uncertain'; confidence: number; rationale: string; evidence: string; reviewAdvice: string; model: string; reviewedAt: string }
 type Finding = { id: string; title: string; severity: string; file: string; line: number; excerpt: string; ruleId?: string; cwe?: string; hint?: string; confidence?: string; reason?: string; isNew?: boolean; fixed?: boolean; aiAssessment?: AiAssessment; aiReviewError?: string }
 type AiProviderId = 'local' | 'cloud-codex' | 'cloud-claude' | 'cloud-opencode' | 'cloud-pi'
-type AiConfig = { provider: AiProviderId; model: string; codexConnected?: boolean; claudeConnected?: boolean; opencodeConnected?: boolean; piConnected?: boolean; connectedByProvider?: Record<string, boolean>; hasApiKey: boolean; apiKeyMasked: string; localModels: string[]; localAvailable?: boolean; codexModels: string[]; claudeModels?: string[]; opencodeModels?: string[]; piModels?: string[] }
+type AiConfig = { provider: AiProviderId; model: string; codexConnected?: boolean; claudeConnected?: boolean; opencodeConnected?: boolean; piConnected?: boolean; connectedByProvider?: Record<string, boolean>; hasApiKey: boolean; apiKeyMasked: string; localModels: string[]; localAvailable?: boolean; codexModels: string[]; claudeModels?: string[]; opencodeModels?: string[]; piModels?: string[]; setupCompleted?: boolean; selectedCategories?: Kind[]; localModelInstalled?: boolean }
 type FindingFixPreview = { projectId: string; findingId: string; file: string; explanation: string; target: string; replacement: string; model: string }
 type TestTarget = { file: string; runner: 'node' | 'npm' | 'pytest' | 'go' | 'cargo'; names?: string[]; command: string }
 type SeverityCounts = { critical: number; high: number; medium: number; low: number; info: number }
@@ -25,6 +26,14 @@ type CatalogPayload = { total: number; categories: string[]; rules: CatalogRule[
 type SystemProfile = { cpuModel: string; cpuCores: number; totalMemGb: number; freeMemGb: number; tier: 'high' | 'balanced' | 'light'; maxSteps: number; stepDelayMs: number }
 type ExtremeFinding = { ruleId: string; title: string; severity: string; cwe: string; detail: string }
 type ExtremeStats = { pages: number; clicks: number; inputsFuzzed: number; findings: number }
+type ExtremeVisionState = {
+  caption: string
+  activePatchRatio: number
+  dominantBrightness: string
+  contrastStd: number
+  visualDelta: number
+  heatmap64: number[]
+}
 type ExtremeState = {
   projectId: string
   projectName: string
@@ -35,6 +44,7 @@ type ExtremeState = {
   action: string
   targetLabel: string
   frameUrl: string
+  vision?: ExtremeVisionState
   stats: ExtremeStats
   logs: { level: string; text: string }[]
   findings: ExtremeFinding[]
@@ -59,18 +69,22 @@ type Bridge = {
   openProject(id: string): Promise<boolean>
   openDataFolder(): Promise<boolean>
   scanProject(id: string): Promise<Scan>
+  scanProjectChanged?(id: string): Promise<Scan>
+  toggleWatchProject?(id: string): Promise<{ watching: boolean; projectId: string }>
+  onWatchScanUpdate?(cb: (p: { projectId: string; files: string[]; findingsCount: number; score: number; durationMs: number }) => void): () => void
   generateWebRemediation?(id: string): Promise<WebRemediation>
   verifyFinding(p: { projectId: string; findingId: string }): Promise<AiAssessment>
   getFindingContext?(p: { projectId: string; findingId: string }): Promise<SourceContext>
   checkAiStatus?(): Promise<AiHealth>
   getAiConfig?(): Promise<AiConfig>
-  saveAiConfig?(p: { provider: AiProviderId; model: string; apiKey?: string; clearApiKey?: boolean }): Promise<{ config: AiConfig; health: AiHealth }>
+  saveAiConfig?(p: { provider: AiProviderId; model: string; apiKey?: string; clearApiKey?: boolean; selectedCategories?: Kind[] }): Promise<{ config: AiConfig; health: AiHealth }>
+  completeOnboardingSetup?(p: { provider: AiProviderId; model: string; apiKey?: string; selectedCategories: Kind[] }): Promise<{ config: AiConfig; health: AiHealth; localModelPullStarted: boolean; installedCategories: Kind[] }>
   connectCodex?(): Promise<{ config: AiConfig; health: AiHealth }>
   disconnectCodex?(): Promise<{ config: AiConfig; health: AiHealth }>
   connectProvider?(provider: AiProviderId): Promise<{ config: AiConfig; health: AiHealth }>
   disconnectProvider?(provider: AiProviderId): Promise<{ config: AiConfig; health: AiHealth }>
   generateFindingFix?(p: { projectId: string; findingId: string }): Promise<{ explanation: string; target: string; replacement: string; file: string; model: string }>
-  applyFindingFix?(p: { projectId: string; findingId: string; file: string; target: string; replacement: string }): Promise<{ applied: boolean; file: string }>
+  applyFindingFix?(p: { projectId: string; findingId: string; file: string; target: string; replacement: string; verifyCommand?: string }): Promise<{ applied: boolean; rolledBack?: boolean; reason?: string; file: string }>
   fixAllFindings?(p: { projectId: string }): Promise<{ total: number; fixed: number; failed: number }>
   onFixAllProgress?(cb: (p: { projectId: string; total: number; done: number; fixed: number; failed: number; currentTitle: string; state: string }) => void): () => void
   listRules?(): Promise<CatalogPayload>
@@ -78,7 +92,15 @@ type Bridge = {
   startExtremeTest?(projectId: string): Promise<{ cancelled: boolean; stats: ExtremeStats }>
   stopExtremeTest?(projectId: string): Promise<boolean>
   onExtremeTestEvent?(cb: (ev: { projectId: string; type: string; [k: string]: unknown }) => void): () => void
-  exportReport?(p: { projectId?: string; format: 'sarif' | 'markdown' | 'json' }): Promise<{ saved: boolean; filePath: string | null }>
+  startNpcSwarm?(p: { projectId: string; npcCount?: number }): Promise<{ cancelled: boolean; npcCount: number; stats: Record<string, number>; findings: Array<{ ruleId: string; title: string; severity: string; cwe: string; file: string; hint: string; reason?: string; excerpt?: string }> }>
+  stopNpcSwarm?(projectId: string): Promise<boolean>
+  onNpcSwarmEvent?(cb: (ev: { projectId: string; type: string; [k: string]: unknown }) => void): () => void
+  getVisionStatus?(): Promise<{ installed: boolean; ready: boolean; id: string; name: string; sizeMb: number; actualSizeMb: number; architecture: string; capabilities: string[] }>
+  installVisionModel?(): Promise<{ installed: boolean; ready: boolean; id: string; name: string; sizeMb: number; actualSizeMb: number; architecture: string; capabilities: string[] }>
+  checkAppUpdates?(): Promise<{ available: boolean; currentVersion: string; latestVersion: string; releaseUrl?: string; releaseNotes?: string; assetName?: string; downloadUrl?: string; sizeBytes?: number; error?: string }>
+  downloadAppUpdate?(info: { latestVersion: string; assetName?: string; downloadUrl?: string; sizeBytes?: number }): Promise<{ launched: boolean; destPath: string }>
+  onUpdateProgress?(cb: (p: { received: number; totalBytes: number; percent: number; state: string }) => void): () => void
+  exportReport?(p: { projectId?: string; format: 'sarif' | 'markdown' | 'html' | 'json' }): Promise<{ saved: boolean; filePath: string | null }>
   runProjectTests(id: string): Promise<TestResult>
   runProjectTestFile(p: { projectId: string; file: string }): Promise<TestResult>
   cancelAiReview?(projectId: string): Promise<boolean>
@@ -109,6 +131,32 @@ const nav: { name: Route; Icon: typeof Layers3 }[] = [
   { name: 'Rule catalog', Icon: ShieldCheck },
   { name: 'Environments', Icon: Terminal },
   { name: 'Settings', Icon: SlidersHorizontal },
+]
+const ITHACA_SPINNER_VERBS = [
+  'Cogitating…',
+  'Ithaca-scouting…',
+  'Aegis-shielding…',
+  'Odysseying…',
+  'Veritas-sifting…',
+  'Phalanx-marching…',
+  'Ambrosia-brewing…',
+  'Taint-simmering…',
+  'Sirens-muting…',
+  'Trojan-sniffing…',
+  'Kraken-poking…',
+  'Specula-peering…',
+  'Oracle-pondering…',
+  'Trireme-cruising…',
+  'AST-unraveling…',
+  'Chariot-drifting…',
+  'Packet-wrangling…',
+  'Schema-forging…',
+  'Byte-marinating…',
+  'Nexus-tracing…',
+  'Telum-aiming…',
+  'Custos-patrolling…',
+  'Lockfile-zesting…',
+  'Flibbertigibbeting…',
 ]
 const dateLabel = (value?: string | null) => value ? new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Not scanned'
 
@@ -142,6 +190,30 @@ function App() {
   const [sysProfile, setSysProfile] = useState<SystemProfile | null>(null)
   const [extremeChoice, setExtremeChoice] = useState<Project | null>(null)
   const [extreme, setExtreme] = useState<ExtremeState | null>(null)
+  const [showBalloonGame, setShowBalloonGame] = useState<boolean>(false)
+  const [visionStatus, setVisionStatus] = useState<{ installed: boolean; ready: boolean; id: string; name: string; sizeMb: number; actualSizeMb: number; architecture: string; capabilities: string[] } | null>(null)
+  const [showSetupWizard, setShowSetupWizard] = useState<boolean>(false)
+  const [setupProvider, setSetupProvider] = useState<AiProviderId>('local')
+  const [setupModel, setSetupModel] = useState<string>('qwen2.5-coder:0.5b')
+  const [setupApiKey, setSetupApiKey] = useState<string>('')
+  const [setupCategories, setSetupCategories] = useState<Kind[]>(['Website', 'Software', 'API / backend'])
+  const [watchingIds, setWatchingIds] = useState<Record<string, boolean>>({})
+  const [updateInfo, setUpdateInfo] = useState<{ available: boolean; currentVersion: string; latestVersion: string; releaseUrl?: string; assetName?: string; downloadUrl?: string; sizeBytes?: number } | null>(null)
+  const [updateProgress, setUpdateProgress] = useState<{ percent: number; state: string } | null>(null)
+  const [verbIdx, setVerbIdx] = useState<number>(0)
+  const spinnerVerb = ITHACA_SPINNER_VERBS[verbIdx % ITHACA_SPINNER_VERBS.length]
+  const [npcCount, setNpcCount] = useState<number>(120)
+  const [npcSwarm, setNpcSwarm] = useState<{
+    projectId: string
+    projectName: string
+    targetUrl: string
+    running: boolean
+    npcCount: number
+    stats: { totalNpcs: number; completedNpcs: number; totalRequests: number; ok2xx3xx: number; status4xx: number; status429: number; status5xx: number; timeouts: number; p50Ms: number; p95Ms: number; p99Ms: number; rps: number; findings: number }
+    findings: Array<{ ruleId: string; title: string; severity: string; cwe: string; file: string; hint: string; reason?: string; excerpt?: string }>
+    logs: Array<{ level: string; text: string }>
+    error?: string
+  } | null>(null)
   const [webFixPack, setWebFixPack] = useState<WebRemediation | null>(null)
   const [webFixPlatform, setWebFixPlatform] = useState<'nginx' | 'apache' | 'express' | 'nextjs' | 'vercel' | 'cloudflare'>('nginx')
   const [webFixCopied, setWebFixCopied] = useState(false)
@@ -248,7 +320,7 @@ function App() {
       setBusy('')
     }
   }
-  const exportReport = async (format: 'sarif' | 'markdown' | 'json', projectId?: string) => {
+  const exportReport = async (format: 'sarif' | 'markdown' | 'html' | 'json', projectId?: string) => {
     if (!bridge?.exportReport) return
     setBusy(`export:${format}`)
     setMessage('')
@@ -318,7 +390,17 @@ function App() {
   }, [bridge])
   useEffect(() => {
     if (!bridge?.getAiConfig) return
-    void bridge.getAiConfig().then(setAiConfig).catch((e) => setMessage(errorText(e)))
+    void bridge.getAiConfig().then((cfg) => {
+      setAiConfig(cfg)
+      setSetupProvider(cfg.provider || 'local')
+      setSetupModel(cfg.model || 'qwen2.5-coder:0.5b')
+      if (Array.isArray(cfg.selectedCategories) && cfg.selectedCategories.length > 0) {
+        setSetupCategories(cfg.selectedCategories)
+      }
+      if (!cfg.setupCompleted) {
+        setShowSetupWizard(true)
+      }
+    }).catch((e) => setMessage(errorText(e)))
   }, [bridge])
   const CLOUD_PROVIDER_INFO: Record<Exclude<AiProviderId, 'local'>, { label: string; short: string; connectBtn: string; connectedTitle: string; connectTitle: string; connectedDesc: string; connectDesc: string; placeholder: string }> = {
     'cloud-codex': {
@@ -379,6 +461,53 @@ function App() {
     if (p === 'cloud-opencode') return Boolean(aiConfig.opencodeConnected)
     if (p === 'cloud-pi') return Boolean(aiConfig.piConnected)
     return false
+  }
+  const isCloudConnected = Boolean(aiConfig && aiConfig.provider !== 'local' && (isProviderConnected(aiConfig.provider) || aiConfig.hasApiKey))
+  const activeKindOptions = useMemo(() => {
+    const allowed = aiConfig?.selectedCategories
+    if (!allowed || !allowed.length) return kinds
+    return kinds.filter((k) => allowed.includes(k.name))
+  }, [aiConfig])
+
+  const finishOnboardingSetup = async () => {
+    if (!bridge?.completeOnboardingSetup) {
+      setShowSetupWizard(false)
+      return
+    }
+    if (setupCategories.length === 0) {
+      setMessage('Select at least one category (or click Select All) to install its analyzer package.')
+      return
+    }
+    setBusy('onboarding-setup')
+    setMessage('')
+    try {
+      const res = await bridge.completeOnboardingSetup({
+        provider: setupProvider,
+        model: setupModel,
+        apiKey: setupApiKey.trim() || undefined,
+        selectedCategories: setupCategories,
+      })
+      setAiConfig(res.config)
+      setAiHealth(res.health)
+      if (!kind || !res.installedCategories.includes(kind)) {
+        setKind(res.installedCategories[0] || 'Software')
+      }
+      if (bridge.listRules) {
+        const freshRules = await bridge.listRules()
+        setCatalog(freshRules)
+      }
+      setShowSetupWizard(false)
+      setSetupApiKey('')
+      if (setupProvider === 'local') {
+        setMessage(`Setup complete! Installed ${res.installedCategories.length} category package(s) and configured lightweight local coding AI (${setupModel}).`)
+      } else {
+        setMessage(`Setup complete! Installed ${res.installedCategories.length} category package(s) with Cloud Provider (${CLOUD_PROVIDER_INFO[setupProvider].label}) — no local model installed.`)
+      }
+    } catch (e) {
+      setMessage(errorText(e))
+    } finally {
+      setBusy('')
+    }
   }
   const saveAiSettings = async (nextProvider: AiProviderId, nextModel: string, newKey?: string, clearApiKey?: boolean) => {
     if (!bridge?.saveAiConfig) return
@@ -481,7 +610,7 @@ function App() {
     setBusy(`apply:${fixPreview.findingId}`)
     setMessage('')
     try {
-      await bridge.applyFindingFix({
+      const res = await bridge.applyFindingFix({
         projectId: fixPreview.projectId,
         findingId: fixPreview.findingId,
         file: fixPreview.file,
@@ -489,7 +618,11 @@ function App() {
         replacement: fixPreview.replacement,
       })
       await reload()
-      setMessage(`Fix applied to ${fixPreview.file}. Re-scan to verify the updated score.`)
+      if (res?.rolledBack) {
+        setMessage(`Auto-rollback triggered on ${fixPreview.file}: ${res.reason || 'Patch broke syntax/verification.'}`)
+      } else {
+        setMessage(`Verified & applied fix to ${fixPreview.file}. Re-scan to confirm the updated score.`)
+      }
       setFixPreview(null)
     } catch (e) {
       setMessage(errorText(e))
@@ -503,7 +636,7 @@ function App() {
       setExtreme((prev) => {
         if (!prev || prev.projectId !== ev.projectId) return prev
         if (ev.type === 'frame' && typeof ev.dataUrl === 'string') {
-          return { ...prev, frameUrl: ev.dataUrl }
+          return { ...prev, frameUrl: ev.dataUrl, vision: (ev.vision as ExtremeVisionState) || prev.vision }
         }
         if (ev.type === 'log' && typeof ev.text === 'string') {
           const nextLogs = [{ level: String(ev.level || 'info'), text: ev.text }, ...prev.logs].slice(0, 60)
@@ -534,13 +667,185 @@ function App() {
       })
     })
   }, [bridge])
-  const startExtremeTest = async (_p: Project) => {
+  const startExtremeTest = async (p: Project) => {
     setExtremeChoice(null)
-    setMessage('Extreme Live Sandbox Test is currently under development and locked.')
+    if (!isCloudConnected) {
+      setShowSetupWizard(true)
+      setMessage('Extreme Live Sandbox Test is only unlocked when you connect and use a Cloud AI Provider (e.g. Claude, Codex, OpenCode, or Pi).')
+      return
+    }
+    if (!bridge?.startExtremeTest) return
+    setSelectedProject(p)
+    setRoute('Test runs')
+    setShowBalloonGame(true)
+    setExtreme({
+      projectId: p.id,
+      projectName: p.name,
+      running: true,
+      step: 0,
+      maxSteps: sysProfile?.maxSteps || 55,
+      url: p.root,
+      action: 'booting',
+      targetLabel: '',
+      frameUrl: '',
+      stats: { pages: 1, clicks: 0, inputsFuzzed: 0, findings: 0 },
+      logs: [{ level: 'info', text: `Booting isolated Chromium sandbox + OSIEN Vision-22M AI for ${p.name}…` }],
+      findings: [],
+    })
+    try {
+      await bridge.startExtremeTest(p.id)
+    } catch (e) {
+      const msg = errorText(e)
+      setExtreme((prev) => prev ? { ...prev, running: false, error: msg } : prev)
+      setMessage(msg)
+    }
   }
   const stopExtremeTest = async (projectId: string) => {
     try {
       await bridge?.stopExtremeTest?.(projectId)
+    } catch (e) {
+      setMessage(errorText(e))
+    }
+  }
+
+  useEffect(() => {
+    if (!bridge?.onNpcSwarmEvent) return
+    return bridge.onNpcSwarmEvent((ev) => {
+      setNpcSwarm((prev) => {
+        if (!prev || prev.projectId !== ev.projectId) return prev
+        if (ev.type === 'started') {
+          return { ...prev, targetUrl: String(ev.targetUrl || prev.targetUrl) }
+        }
+        if (ev.type === 'log') {
+          return { ...prev, logs: [...prev.logs.slice(-60), { level: String(ev.level || 'info'), text: String(ev.text || '') }] }
+        }
+        if (ev.type === 'finding' && ev.finding) {
+          const f = ev.finding as { ruleId: string; title: string; severity: string; cwe: string; file: string; hint: string; reason?: string; excerpt?: string }
+          return { ...prev, findings: [f, ...prev.findings] }
+        }
+        if (ev.type === 'progress' && ev.stats) {
+          return { ...prev, stats: ev.stats as typeof prev.stats }
+        }
+        if (ev.type === 'done') {
+          return {
+            ...prev,
+            running: false,
+            targetUrl: String(ev.targetUrl || prev.targetUrl),
+            stats: (ev.stats as typeof prev.stats) || prev.stats,
+            findings: (ev.findings as typeof prev.findings) || prev.findings,
+          }
+        }
+        return prev
+      })
+    })
+  }, [bridge])
+
+  const startNpcSwarm = async (p: Project) => {
+    if (!bridge?.startNpcSwarm) return
+    setShowBalloonGame(true)
+    setNpcSwarm({
+      projectId: p.id,
+      projectName: p.name,
+      targetUrl: p.root,
+      running: true,
+      npcCount,
+      stats: { totalNpcs: npcCount, completedNpcs: 0, totalRequests: 0, ok2xx3xx: 0, status4xx: 0, status429: 0, status5xx: 0, timeouts: 0, p50Ms: 0, p95Ms: 0, p99Ms: 0, rps: 0, findings: 0 },
+      findings: [],
+      logs: [{ level: 'info', text: `Launching ${npcCount} virtual NPC users against ${p.name}...` }],
+    })
+    try {
+      const res = await bridge.startNpcSwarm({ projectId: p.id, npcCount })
+      setNpcSwarm((prev) => prev && prev.projectId === p.id ? {
+        ...prev,
+        running: false,
+        stats: (res.stats as typeof prev.stats) || prev.stats,
+        findings: res.findings || prev.findings,
+      } : prev)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'NPC Swarm test failed.'
+      setNpcSwarm((prev) => prev ? { ...prev, running: false, error: msg } : prev)
+      setMessage(msg)
+    }
+  }
+
+  useEffect(() => {
+    void bridge?.getVisionStatus?.().then((st) => { if (st) setVisionStatus(st) }).catch((err) => { void err })
+    void bridge?.checkAppUpdates?.().then((u) => { if (u) setUpdateInfo(u) }).catch((err) => { void err })
+  }, [bridge])
+  useEffect(() => {
+    if (!bridge?.onUpdateProgress) return
+    return bridge.onUpdateProgress((p) => setUpdateProgress({ percent: p.percent, state: p.state }))
+  }, [bridge])
+  const triggerAppUpdate = async () => {
+    if (!bridge?.downloadAppUpdate || !updateInfo?.downloadUrl) return
+    setBusy('app-update')
+    setUpdateProgress({ percent: 0, state: 'downloading' })
+    try {
+      await bridge.downloadAppUpdate(updateInfo)
+    } catch (e) {
+      setMessage(errorText(e))
+      setUpdateProgress(null)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const isAnyTaskActive = Boolean(busy || npcSwarm?.running || extreme?.running || fixAllState || Object.keys(reviews).length > 0)
+  useEffect(() => {
+    if (!bridge?.onWatchScanUpdate) return
+    return bridge.onWatchScanUpdate((ev) => {
+      setMessage(`Live Watch (${ev.durationMs}ms): scanned ${ev.files.slice(0, 2).join(', ')} — ${ev.findingsCount} finding(s), score ${ev.score}/100.`)
+    })
+  }, [bridge])
+  const scanChanged = async (p: Project) => {
+    if (!bridge?.scanProjectChanged) return
+    setBusy(`diff:${p.id}`)
+    setMessage('')
+    try {
+      const res = await bridge.scanProjectChanged(p.id)
+      await reload()
+      setMessage(`Git Diff Scan finished in ${res.durationMs || 0}ms: ${res.filesScanned} changed file(s), ${res.findings.length} finding(s).`)
+    } catch (e) {
+      setMessage(errorText(e))
+    } finally {
+      setBusy('')
+    }
+  }
+  const toggleWatch = async (p: Project) => {
+    if (!bridge?.toggleWatchProject) return
+    try {
+      const res = await bridge.toggleWatchProject(p.id)
+      setWatchingIds((prev) => ({ ...prev, [p.id]: res.watching }))
+      setMessage(res.watching ? `Live File Watch enabled for ${p.name} (auto-scans on save).` : `Live File Watch stopped for ${p.name}.`)
+    } catch (e) {
+      setMessage(errorText(e))
+    }
+  }
+  useEffect(() => {
+    if (!isAnyTaskActive) return
+    const timer = setInterval(() => {
+      setVerbIdx((i) => (i + 1) % ITHACA_SPINNER_VERBS.length)
+    }, 1700)
+    return () => clearInterval(timer)
+  }, [isAnyTaskActive])
+
+  const installLocalVision = async () => {
+    if (!bridge?.installVisionModel) return
+    setBusy('vision-install')
+    try {
+      const st = await bridge.installVisionModel()
+      setVisionStatus(st)
+      setMessage(`Initialized ${st.name} (${st.actualSizeMb || st.sizeMb} MB) locally.`)
+    } catch (e) {
+      setMessage(errorText(e))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const stopNpcSwarm = async (projectId: string) => {
+    try {
+      await bridge?.stopNpcSwarm?.(projectId)
     } catch (e) {
       setMessage(errorText(e))
     }
@@ -734,16 +1039,32 @@ function App() {
             {route === 'Projects' && <button className="primary" onClick={() => { setDialog(true); setMessage('') }}><Plus size={17}/> Add project</button>}
           </div>
         </div>
+        {updateInfo?.available && (
+          <div className="review-banner" style={{ borderColor: 'rgba(56,189,248,0.45)' }}>
+            <Download size={14}/>
+            <span>
+              <strong>Update Available: OSIEN Probe v{updateInfo.latestVersion}</strong> (current v{updateInfo.currentVersion})
+              {updateProgress ? ` · ${updateProgress.state === 'launching' ? 'Launching installer…' : `Downloading ${updateProgress.percent}%`}` : ''}
+            </span>
+            <button className="primary" style={{ padding: '4px 12px', fontSize: 12 }} disabled={busy === 'app-update'} onClick={() => void triggerAppUpdate()}>
+              {busy === 'app-update' ? `${updateProgress?.percent ?? 0}%…` : 'Update & Restart'}
+            </button>
+          </div>
+        )}
         {message && <div className="global-message" role="alert">{message}<button className="icon-button" onClick={() => setMessage('')}><X size={15}/></button></div>}
+        {busy.startsWith('scan:') && <div className="review-banner">
+          <RefreshCw size={13} className="spinning"/>
+          <span><strong>{spinnerVerb}</strong> · Running Lex Scan (AST + Taint + 5,130+ rules)…</span>
+        </div>}
         {fixAllState && <div className="review-banner">
           <RefreshCw size={13} className="spinning"/>
-          <span>Codex is fixing findings ({fixAllState.done}/{fixAllState.total} · {fixAllState.fixed} applied): {fixAllState.currentTitle}</span>
+          <span><strong>{spinnerVerb}</strong> · AI is fixing findings ({fixAllState.done}/{fixAllState.total} · {fixAllState.fixed} applied): {fixAllState.currentTitle}</span>
         </div>}
         {Object.values(reviews).map(r => {
           const name = projects.find(p => p.id === r.projectId)?.name || 'project'
           return <div className="review-banner" key={r.projectId}>
             <RefreshCw size={13} className="spinning"/>
-            <span>Local AI is double-checking {name}'s critical/high findings in the background · {r.done}/{r.total} done. Results are already usable.</span>
+            <span><strong>{spinnerVerb}</strong> · AI is verifying {name}'s findings in the background ({r.done}/{r.total} done).</span>
             <button className="filter-button" onClick={() => void bridge?.cancelAiReview?.(r.projectId)}>Stop AI review</button>
           </div>
         })}
@@ -821,8 +1142,67 @@ function App() {
           />
         ) : route === 'Test runs' ? (
           <>
-            {extreme && <ExtremeSandboxView extreme={extreme} sysProfile={sysProfile} onStop={stopExtremeTest} onClose={() => setExtreme(null)}/>}
-            <Runs projects={projects} selected={selectedProject} busy={busy} isCloudCodex={isCloudAi} onScan={scan} onExtreme={startExtremeTest} onFixAll={fixAllWithAi} onWebFix={openWebFix} onTest={runTests} onRunFile={runTestFile} onExport={exportReport}/>
+            {extreme && <ExtremeSandboxView extreme={extreme} sysProfile={sysProfile} spinnerVerb={spinnerVerb} onStop={stopExtremeTest} onClose={() => setExtreme(null)}/>}
+            {(showBalloonGame || busy.startsWith('scan:')) && (
+              <BalloonGame
+                activeTaskLabel={npcSwarm?.running ? `${spinnerVerb} (${npcSwarm.npcCount} NPCs)` : busy.startsWith('scan:') ? spinnerVerb : undefined}
+                onClose={() => setShowBalloonGame(false)}
+              />
+            )}
+            {npcSwarm && (
+              <section className="extreme-shell" style={{ marginBottom: 14 }}>
+                <div className="extreme-head">
+                  <div className="extreme-title">
+                    <span className={`live-dot ${npcSwarm.running ? '' : 'live-dot-idle'}`}/>
+                    <div>
+                      <strong>Legio Swarm (100+ NPCs) · {npcSwarm.projectName}</strong>
+                      <small>{npcSwarm.targetUrl} · {npcSwarm.stats.completedNpcs}/{npcSwarm.stats.totalNpcs} NPCs · {npcSwarm.stats.rps} req/s · {npcSwarm.running ? spinnerVerb : 'Completed'}</small>
+                    </div>
+                  </div>
+                  <div className="export-actions">
+                    <button className="filter-button" onClick={() => setShowBalloonGame((v) => !v)}>
+                      <Play size={13}/> {showBalloonGame ? 'Hide Balloon Game' : 'Play Balloon Dodge'}
+                    </button>
+                    {npcSwarm.running
+                      ? <button className="danger-button" onClick={() => stopNpcSwarm(npcSwarm.projectId)}>Stop swarm</button>
+                      : <button className="filter-button" onClick={() => setNpcSwarm(null)}>Close</button>}
+                  </div>
+                </div>
+                {npcSwarm.error && <div className="form-error">{npcSwarm.error}</div>}
+                <div className="extreme-stats" style={{ marginTop: 10 }}>
+                  <div><span>NPCs</span><b>{npcSwarm.stats.completedNpcs}/{npcSwarm.stats.totalNpcs}</b></div>
+                  <div><span>Requests</span><b>{npcSwarm.stats.totalRequests}</b></div>
+                  <div><span>2xx/3xx</span><b>{npcSwarm.stats.ok2xx3xx}</b></div>
+                  <div><span>429 / 5xx</span><b>{npcSwarm.stats.status429} / {npcSwarm.stats.status5xx}</b></div>
+                  <div><span>p95 / p99</span><b>{npcSwarm.stats.p95Ms} / {npcSwarm.stats.p99Ms} ms</b></div>
+                  <div><span>Bugs found</span><b>{npcSwarm.findings.length}</b></div>
+                </div>
+                {npcSwarm.findings.length > 0 && (
+                  <div className="extreme-findings" style={{ marginTop: 10 }}>
+                    <strong>Real-world NPC swarm bugs ({npcSwarm.findings.length})</strong>
+                    {npcSwarm.findings.map((f, i) => (
+                      <div key={`${f.ruleId}-${i}`} className="extreme-finding-row">
+                        <span className={`badge sev-${f.severity}`}>{f.severity}</span>
+                        <div>
+                          <div><strong>{f.title}</strong> <code>{f.cwe}</code></div>
+                          <small>{f.reason || f.hint}</small>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {npcSwarm.logs.length > 0 && (
+                  <div className="extreme-logs" style={{ marginTop: 10 }}>
+                    <div className="extreme-log-list">
+                      {npcSwarm.logs.map((l, i) => (
+                        <div key={i} className={`extreme-log-line log-${l.level}`}>{l.text}</div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
+            <Runs projects={projects} selected={selectedProject} busy={busy} spinnerVerb={spinnerVerb} isCloudCodex={isCloudConnected} watchingIds={watchingIds} npcCount={npcCount} onNpcCountChange={setNpcCount} onNpcSwarm={startNpcSwarm} onScan={scan} onScanChanged={scanChanged} onToggleWatch={toggleWatch} onExtreme={startExtremeTest} onFixAll={fixAllWithAi} onWebFix={openWebFix} onTest={runTests} onRunFile={runTestFile} onExport={exportReport}/>
           </>
         ) : route === 'Rule catalog' ? (
           <RuleCatalog catalog={catalog}/>
@@ -935,6 +1315,28 @@ function App() {
               <button className="filter-button" onClick={() => void refreshAll()} disabled={busy === 'refresh'}>Check status</button>
             </div>}
             <div className="settings-row">
+              <div>
+                <strong>Workspace Setup &amp; Category Packages ({aiConfig?.selectedCategories?.length || 10}/10 installed)</strong>
+                <small>Choose Local Coding AI (<code>qwen2.5-coder:0.5b</code>) vs. Cloud Providers (Claude, Codex, OpenCode, Pi) and select which project category packages are installed.</small>
+              </div>
+              <button className="primary" onClick={() => setShowSetupWizard(true)}>
+                <SlidersHorizontal size={13}/> Customize AI &amp; Categories
+              </button>
+            </div>
+            <div className="settings-row">
+              <div>
+                <strong>Cactus Compute Mirage · 22MB Local VLM ({visionStatus?.name || 'Cactus Mirage-22M'})</strong>
+                <small>
+                  {visionStatus?.installed
+                    ? `Ready (${visionStatus.actualSizeMb || visionStatus.sizeMb} MB · ${visionStatus.architecture}) — All-in-one OCR, object detection, segmentation & structured JSON reasoning for Arena Odyssey.`
+                    : '22 MB on-device Vision-Language Model by Cactus Compute (OCR, bounding boxes, segmentation & JSON reasoning via Cactus.js WASM or pip install cactus-compute).'}
+                </small>
+              </div>
+              <button className="filter-button" onClick={() => void installLocalVision()} disabled={busy === 'vision-install'}>
+                {busy === 'vision-install' ? 'Initializing Mirage 22MB…' : visionStatus?.installed ? 'Re-verify Mirage 22MB' : 'Initialize Mirage 22MB'}
+              </button>
+            </div>
+            <div className="settings-row">
               <div><strong>Export workspace report</strong><small>Save all current project findings as SARIF 2.1.0 or Markdown</small></div>
               <div className="export-actions">
                 <button className="filter-button" onClick={() => void exportReport('sarif')} disabled={!findings.length || !!busy}><Download size={13}/> SARIF</button>
@@ -971,9 +1373,14 @@ function App() {
             <button onClick={async () => { try { const picked = await bridge!.pickFolder(); if (picked) setFolder(picked) } catch (e) { setMessage(errorText(e)) } }}>Browse</button>
           </div>
         )}
-        <div className="field-label category-label">Project category <span>Required</span></div>
+        <div className="field-label category-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>Project category <span>({activeKindOptions.length}/10 packages installed)</span></div>
+          <button type="button" className="filter-button" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => { setDialog(false); setShowSetupWizard(true) }}>
+            Customize packages
+          </button>
+        </div>
         <div className="kind-grid">
-          {kinds.map(({ name, detail, Icon }) => <button key={name} className={`kind-option ${kind === name ? 'chosen' : ''}`} onClick={() => setKind(name)}>
+          {activeKindOptions.map(({ name, detail, Icon }) => <button key={name} className={`kind-option ${kind === name ? 'chosen' : ''}`} onClick={() => setKind(name)}>
             <Icon size={17}/><span><strong>{name}</strong><small>{detail}</small></span>{kind === name && <Check size={15}/>}
           </button>)}
         </div>
@@ -1089,20 +1496,27 @@ function App() {
       </div>
       <div className="mode-grid">
         <button className="mode-card" onClick={() => { const target = extremeChoice; setExtremeChoice(null); void scan(target) }}>
-          <div className="mode-badge">Fast · Static</div>
-          <strong>Traditional Test</strong>
-          <small>Evaluates 550+ static rules, AST checks, taint tracking, and detects your unit test suite without running the app.</small>
+          <div className="mode-badge">Lex · Fast Static</div>
+          <strong>Lex Scan (Traditional)</strong>
+          <small>Evaluates 5,130+ static rules, 9-language AST call graphs, taint tracking, and ORM/CVE checks without running the app.</small>
         </button>
         <button
           className="mode-card mode-card-extreme"
-          disabled
-          title="Extreme Live Sandbox Test is currently under development"
-          style={{ opacity: 0.55, cursor: 'not-allowed' }}
+          onClick={() => {
+            const target = extremeChoice
+            setExtremeChoice(null)
+            void startExtremeTest(target)
+          }}
+          style={isCloudConnected ? undefined : { opacity: 0.72 }}
         >
-          <div className="mode-badge mode-badge-extreme">Under Development · Locked</div>
-          <strong>Extreme Live Sandbox Test</strong>
+          <div className="mode-badge mode-badge-extreme">
+            {isCloudConnected ? 'Unlocked · Cloud AI + Vision-22M' : 'Cloud Provider Required · Locked'}
+          </div>
+          <strong>Arena Odyssey (Extreme Sandbox)</strong>
           <small>
-            Temporarily locked while in active development. Use Traditional Test for static, AST, taint, and CVE analysis.
+            {isCloudConnected
+              ? 'Boots an isolated Chromium sandbox and inspects every live rendered frame with Vision-22M AI to catch blank screens, overlaps, broken images, and UI bugs.'
+              : 'Locked while using Local AI. Click to open Customization and connect a Cloud Provider (e.g. Anthropic Claude, OpenAI Codex, OpenCode, or Pi) to unlock.'}
           </small>
         </button>
       </div>
@@ -1111,6 +1525,207 @@ function App() {
         <button className="filter-button" onClick={() => setExtremeChoice(null)}>Cancel</button>
       </div>
     </section></div>}
+    {showSetupWizard && (
+      <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && aiConfig?.setupCompleted) setShowSetupWizard(false) }}>
+        <section className="dialog" style={{ maxWidth: 820, maxHeight: '90vh', overflowY: 'auto' }}>
+          <div className="dialog-head">
+            <div className="dialog-brand">
+              <img className="dialog-logo" src="./logo.png" alt="OSIEN Probe"/>
+              <div>
+                <h2>Customize Your OSIEN Probe Setup</h2>
+                <p>Choose your AI Engine and select which project category packages to install</p>
+              </div>
+            </div>
+            {aiConfig?.setupCompleted && (
+              <button className="icon-button" onClick={() => setShowSetupWizard(false)}><X size={18}/></button>
+            )}
+          </div>
+
+          <div style={{ marginTop: 8 }}>
+            <div className="field-label category-label">
+              1. Choose AI Engine <span>Local Coding Model vs. Cloud Coding Provider</span>
+            </div>
+            <div className="mode-grid" style={{ marginTop: 6 }}>
+              <button
+                type="button"
+                className={`mode-card ${setupProvider === 'local' ? 'chosen' : ''}`}
+                style={{ border: setupProvider === 'local' ? '1.5px solid #38bdf8' : undefined, textAlign: 'left' }}
+                onClick={() => {
+                  setSetupProvider('local')
+                  setSetupModel('qwen2.5-coder:0.5b')
+                }}
+              >
+                <div className="mode-badge">100% Offline · ~395 MB</div>
+                <strong>Local Coding AI Model (<code>qwen2.5-coder:0.5b</code>)</strong>
+                <small>
+                  Installs the lightest, fastest, and smartest coding-only local AI model (<code>qwen2.5-coder:0.5b</code>, or <code>qwen2.5-coder:1.5b</code>). Runs 100% offline on CPU.
+                  <em> Note: Extreme Live Sandbox Test stays locked unless a Cloud Provider is used.</em>
+                </small>
+              </button>
+
+              <button
+                type="button"
+                className={`mode-card mode-card-extreme ${setupProvider !== 'local' ? 'chosen' : ''}`}
+                style={{ border: setupProvider !== 'local' ? '1.5px solid #a855f7' : undefined, textAlign: 'left' }}
+                onClick={() => {
+                  const nextProv: Exclude<AiProviderId, 'local'> = setupProvider === 'local' ? 'cloud-claude' : setupProvider
+                  setSetupProvider(nextProv)
+                  setSetupModel(cloudModelsFor(nextProv)[0] || 'claude-sonnet-4-5')
+                }}
+              >
+                <div className="mode-badge mode-badge-extreme">Zero Local Download · Unlocks Extreme Test</div>
+                <strong>Cloud Coding Provider (e.g. Claude, Codex, OpenCode, Pi)</strong>
+                <small>
+                  <strong>No local AI model is installed</strong> (0 MB disk usage). Connects to <strong>Anthropic Claude</strong>, <strong>OpenAI Codex (ChatGPT)</strong>, <strong>OpenCode</strong>, or <strong>Pi Agent</strong> and <strong>unlocks Extreme Live Sandbox Test</strong>.
+                </small>
+              </button>
+            </div>
+
+            {setupProvider === 'local' ? (
+              <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.22)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <div>
+                    <strong>Selected Local Coding Model: <code>{setupModel}</code></strong>
+                    <small style={{ display: 'block', opacity: 0.85 }}>Ultra-fast coding-only model tailored for bug verification and code analysis.</small>
+                  </div>
+                  <select
+                    className="filter-button"
+                    value={setupModel}
+                    onChange={(e) => setSetupModel(e.target.value)}
+                  >
+                    <option value="qwen2.5-coder:0.5b">qwen2.5-coder:0.5b (~395 MB · Lightest &amp; Fastest)</option>
+                    <option value="qwen2.5-coder:1.5b">qwen2.5-coder:1.5b (~980 MB · Balanced Coding)</option>
+                    <option value="qwen3:0.6b">qwen3:0.6b (~480 MB · Fast Reasoning)</option>
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <div style={{ marginTop: 10, padding: '12px', borderRadius: 8, background: 'rgba(168,85,247,0.08)', border: '1px solid rgba(168,85,247,0.25)' }}>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+                  {(['cloud-claude', 'cloud-codex', 'cloud-opencode', 'cloud-pi'] as const).map((pid) => (
+                    <button
+                      key={pid}
+                      type="button"
+                      className={setupProvider === pid ? 'primary' : 'filter-button'}
+                      onClick={() => {
+                        setSetupProvider(pid)
+                        setSetupModel(cloudModelsFor(pid)[0] || '')
+                      }}
+                    >
+                      {CLOUD_PROVIDER_INFO[pid].label} {isProviderConnected(pid) ? '✓' : ''}
+                    </button>
+                  ))}
+                </div>
+                {(() => {
+                  const pid = setupProvider as Exclude<AiProviderId, 'local'>
+                  const pinfo = CLOUD_PROVIDER_INFO[pid]
+                  const connected = isProviderConnected(pid)
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        <div>
+                          <strong>{connected ? pinfo.connectedTitle : pinfo.connectTitle}</strong>
+                          <small style={{ display: 'block', opacity: 0.85 }}>{connected ? pinfo.connectedDesc : pinfo.connectDesc}</small>
+                        </div>
+                        <button
+                          type="button"
+                          className={connected ? 'filter-button' : 'primary'}
+                          disabled={busy === 'connect-provider'}
+                          onClick={() => void (connected ? disconnectCloudProvider(pid) : connectCloudProvider(pid))}
+                        >
+                          <ExternalLink size={13}/> {busy === 'connect-provider' ? 'Connecting…' : connected ? 'Disconnect' : pinfo.connectBtn}
+                        </button>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <input
+                          type="password"
+                          className="text-field"
+                          style={{ flex: 1, minWidth: 220 }}
+                          placeholder={`Optional: Or paste ${pinfo.label} API key (${pinfo.placeholder})`}
+                          value={setupApiKey}
+                          onChange={(e) => setSetupApiKey(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  )
+                })()}
+              </div>
+            )}
+          </div>
+
+          <div style={{ marginTop: 16 }}>
+            <div className="field-label category-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                2. Select Your Work Categories <span>Only selected category packages will be installed ({setupCategories.length}/10)</span>
+              </div>
+              <div className="export-actions">
+                <button
+                  type="button"
+                  className="filter-button"
+                  onClick={() => setSetupCategories(kinds.map((k) => k.name))}
+                >
+                  Select All (10)
+                </button>
+                <button
+                  type="button"
+                  className="filter-button"
+                  onClick={() => setSetupCategories(['Software'])}
+                >
+                  Minimal (1)
+                </button>
+              </div>
+            </div>
+            <div className="kind-grid" style={{ marginTop: 6 }}>
+              {kinds.map(({ name, detail, Icon }) => {
+                const chosen = setupCategories.includes(name)
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    className={`kind-option ${chosen ? 'chosen' : ''}`}
+                    onClick={() => {
+                      setSetupCategories((prev) =>
+                        prev.includes(name)
+                          ? (prev.length > 1 ? prev.filter((c) => c !== name) : prev)
+                          : [...prev, name],
+                      )
+                    }}
+                  >
+                    <Icon size={17}/>
+                    <span>
+                      <strong>{name}</strong>
+                      <small>{detail}</small>
+                    </span>
+                    {chosen && <Check size={15}/>}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="dialog-foot" style={{ marginTop: 16 }}>
+            <span>
+              {setupProvider === 'local'
+                ? `Will install ${setupCategories.length} category package(s) + local ${setupModel}`
+                : `Will install ${setupCategories.length} category package(s) + Cloud ${CLOUD_PROVIDER_INFO[setupProvider].short} (0 MB local model)`}
+            </span>
+            <div className="export-actions">
+              {aiConfig?.setupCompleted && (
+                <button type="button" className="filter-button" onClick={() => setShowSetupWizard(false)}>Cancel</button>
+              )}
+              <button
+                type="button"
+                className="primary"
+                disabled={busy === 'onboarding-setup' || setupCategories.length === 0}
+                onClick={() => void finishOnboardingSetup()}
+              >
+                {busy === 'onboarding-setup' ? 'Installing Selected Packages…' : 'Save & Install Selected Packages'}
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    )}
   </div>
 }
 
@@ -1136,7 +1751,7 @@ function FindingList({
   isCloudCodex: boolean
   onVerify(projectId: string, findingId: string): void
   onFix(projectId: string, findingId: string): void
-  onExport(format: 'sarif' | 'markdown' | 'json', projectId?: string): void
+  onExport(format: 'sarif' | 'markdown' | 'html' | 'json', projectId?: string): void
   onOpen(p: Project): void
 }) {
   const [copied, setCopied] = useState(false)
@@ -1346,8 +1961,15 @@ function Runs({
   projects,
   selected,
   busy,
+  spinnerVerb,
   isCloudCodex,
+  watchingIds,
+  npcCount,
+  onNpcCountChange,
+  onNpcSwarm,
   onScan,
+  onScanChanged,
+  onToggleWatch,
   onExtreme,
   onFixAll,
   onWebFix,
@@ -1358,14 +1980,21 @@ function Runs({
   projects: Project[]
   selected: Project | null
   busy: string
+  spinnerVerb: string
   isCloudCodex: boolean
+  watchingIds: Record<string, boolean>
+  npcCount: number
+  onNpcCountChange(n: number): void
+  onNpcSwarm(p: Project): void
   onScan(p: Project): void
+  onScanChanged(p: Project): void
+  onToggleWatch(p: Project): void
   onExtreme(p: Project): void
   onFixAll(p: Project): void
   onWebFix(p: Project): void
   onTest(p: Project): void
   onRunFile(p: Project, target: TestTarget): void
-  onExport(format: 'sarif' | 'markdown' | 'json', projectId?: string): void
+  onExport(format: 'sarif' | 'markdown' | 'html' | 'json', projectId?: string): void
 }) {
   const list = selected ? projects.filter(p => p.id === selected.id) : projects.filter(p => p.latestRun)
   return <div className="detail-panel">
@@ -1375,32 +2004,63 @@ function Runs({
         <div className="export-actions">
           {p.latestRun && <>
             <button className="filter-button" onClick={() => onExport('sarif', p.id)} disabled={!!busy}><Download size={13}/> SARIF</button>
-            <button className="filter-button" onClick={() => onExport('markdown', p.id)} disabled={!!busy}><Download size={13}/> Report</button>
+            <button className="filter-button" onClick={() => onExport('markdown', p.id)} disabled={!!busy}><Download size={13}/> MD</button>
+            <button className="filter-button" onClick={() => onExport('html', p.id)} disabled={!!busy} title="Export printable Executive HTML / PDF Report"><Download size={13}/> HTML/PDF</button>
           </>}
           {p.kind === 'Website' && (
             <button
               className="filter-button extreme-btn"
               onClick={() => onExtreme(p)}
-              disabled
-              title="Extreme Live Sandbox Test is currently under development"
-              style={{ opacity: 0.55, cursor: 'not-allowed' }}
+              disabled={!!busy}
+              title={isCloudCodex
+                ? 'Launch Extreme Live Sandbox Test with Vision-22M AI frame inspection'
+                : 'Locked: Connect a Cloud AI Provider (Claude, Codex, OpenCode, or Pi) to unlock Extreme Live Sandbox Test'}
+              style={isCloudCodex ? undefined : { opacity: 0.65 }}
             >
-              <Activity size={13}/> Extreme sandbox (Under dev)
+              <Activity size={13}/> {isCloudCodex ? 'Arena Odyssey' : 'Arena (Cloud AI)'}
             </button>
           )}
+          <select
+            aria-label="NPC swarm user count"
+            className="filter-select"
+            value={npcCount}
+            onChange={(e) => onNpcCountChange(Number(e.target.value))}
+            style={{ width: 'auto', minWidth: 96 }}
+          >
+            <option value={100}>100 NPCs</option>
+            <option value={150}>150 NPCs</option>
+            <option value={250}>250 NPCs</option>
+            <option value={500}>500 NPCs</option>
+          </select>
+          <button
+            className="filter-button extreme-btn"
+            onClick={() => onNpcSwarm(p)}
+            disabled={!!busy}
+            title="Launch Legio Swarm: 100+ virtual NPC users (browsers, rage-clickers, chaotic users, high-IQ hackers)"
+          >
+            <Activity size={13}/> Legio Swarm ({npcCount}+)
+          </button>
           {p.latestRun && /^https?:\/\//i.test(p.root) && (
             <button className="filter-button fix-finding-btn" onClick={() => onWebFix(p)} disabled={!!busy}>
-              <ShieldCheck size={13}/> {busy === `webfix:${p.id}` ? 'Generating…' : 'Fix Live URL'}
+              <ShieldCheck size={13}/> {busy === `webfix:${p.id}` ? spinnerVerb : 'Aegis Fix URL'}
             </button>
           )}
           {isCloudCodex && p.latestRun && p.latestRun.findings.some(f => !f.fixed && ['critical', 'high', 'medium'].includes(f.severity)) && (
             <button className="filter-button fix-finding-btn" onClick={() => onFixAll(p)} disabled={!!busy}>
-              <ShieldCheck size={13}/> {busy === `fixall:${p.id}` ? 'Fixing all…' : 'Fix all with AI'}
+              <ShieldCheck size={13}/> {busy === `fixall:${p.id}` ? spinnerVerb : 'Fix all with AI'}
             </button>
           )}
+          {!/^https?:\/\//i.test(p.root) && <>
+            <button className="filter-button" onClick={() => onScanChanged(p)} disabled={!!busy} title="Scan only Git-modified or untracked files">
+              <GitBranch size={13}/> {busy === `diff:${p.id}` ? spinnerVerb : 'Git Diff'}
+            </button>
+            <button className="filter-button" onClick={() => onToggleWatch(p)} title="Auto-scan saved files in real time">
+              <Eye size={13}/> {watchingIds[p.id] ? 'Watching ✓' : 'Watch'}
+            </button>
+          </>}
           <button className="primary" onClick={() => onScan(p)} disabled={busy === `scan:${p.id}`}>
             <RefreshCw size={14} className={busy === `scan:${p.id}` ? 'spinning' : ''}/>
-            {busy === `scan:${p.id}` ? 'Scanning…' : 'Scan source'}
+            {busy === `scan:${p.id}` ? spinnerVerb : 'Lex Scan'}
           </button>
         </div>
       </div>
@@ -1424,6 +2084,38 @@ function Runs({
           {p.latestRun.languagesScanned?.length ? ` · Languages: ${p.latestRun.languagesScanned.join(', ')}` : ''}
           {p.latestRun.truncated ? ' · Finding display capped at 1,000' : ''}
         </p>
+        {Array.isArray(p.scanHistory) && p.scanHistory.length > 0 && (() => {
+          const hist = [...p.scanHistory].slice(0, 12).reverse()
+          const pts = hist.map((h, i) => {
+            const x = hist.length === 1 ? 110 : Math.round((i / (hist.length - 1)) * 210) + 5
+            const y = Math.round(38 - ((Math.max(0, Math.min(100, h.score)) / 100) * 32))
+            return `${x},${y}`
+          }).join(' ')
+          const newCount = p.latestRun!.findings.filter((f) => f.isNew).length
+          const fixedCount = p.latestRun!.findings.filter((f) => f.fixed).length
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, padding: '8px 12px', marginBottom: 10, borderRadius: 8, background: 'rgba(148,163,184,0.06)', border: '1px solid rgba(148,163,184,0.14)', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <svg width="220" height="44" viewBox="0 0 220 44" aria-label="Security score trend">
+                  <polyline fill="none" stroke="#38bdf8" strokeWidth="2.2" points={pts}/>
+                  {hist.map((h, i) => {
+                    const x = hist.length === 1 ? 110 : Math.round((i / (hist.length - 1)) * 210) + 5
+                    const y = Math.round(38 - ((Math.max(0, Math.min(100, h.score)) / 100) * 32))
+                    return <circle key={h.id || i} cx={x} cy={y} r="3" fill="#38bdf8"/>
+                  })}
+                </svg>
+                <div style={{ fontSize: 12 }}>
+                  <strong>Score Trend ({hist.length} scan{hist.length === 1 ? '' : 's'})</strong>
+                  <div style={{ opacity: 0.78 }}>Latest: {p.latestRun!.score}/100 · Earliest: {hist[0].score}/100</div>
+                </div>
+              </div>
+              <div className="export-actions">
+                <span className="badge sev-info">New: {newCount}</span>
+                <span className="badge sev-low">Fixed: {fixedCount}</span>
+              </div>
+            </div>
+          )
+        })()}
         {(p.scanHistory || []).length > 1 && <details className="history-details">
           <summary><History size={12}/> Scan history ({p.scanHistory!.length} runs)</summary>
           <div className="history-list">
@@ -1548,11 +2240,13 @@ function InfoDialog({ onClose }: { onClose(): void }) {
 function ExtremeSandboxView({
   extreme,
   sysProfile,
+  spinnerVerb,
   onStop,
   onClose,
 }: {
   extreme: ExtremeState
   sysProfile: SystemProfile | null
+  spinnerVerb: string
   onStop(projectId: string): void
   onClose(): void
 }) {
@@ -1561,9 +2255,9 @@ function ExtremeSandboxView({
       <div className="extreme-title">
         <span className={`live-dot ${extreme.running ? '' : 'live-dot-idle'}`}/>
         <div>
-          <strong>Extreme Live Sandbox · {extreme.projectName}</strong>
+          <strong>Arena Odyssey · {extreme.projectName}</strong>
           <small>
-            {sysProfile ? `${sysProfile.cpuCores} cores · ${sysProfile.totalMemGb} GB RAM (${sysProfile.tier} tier)` : 'Local PC sandbox'} · Step {extreme.step}/{extreme.maxSteps} · {extreme.running ? 'Autonomous stress test running' : 'Completed'}
+            {sysProfile ? `${sysProfile.cpuCores} cores · ${sysProfile.totalMemGb} GB RAM (${sysProfile.tier} tier)` : 'Local PC sandbox'} · Step {extreme.step}/{extreme.maxSteps} · {extreme.running ? spinnerVerb : 'Completed'}
           </small>
         </div>
       </div>
@@ -1613,6 +2307,26 @@ function ExtremeSandboxView({
             ? <img src={extreme.frameUrl} alt="Live sandbox viewport"/>
             : <div className="extreme-placeholder"><RefreshCw size={18} className="spinning"/><span>Booting isolated Chromium sandbox…</span></div>}
         </div>
+        {extreme.vision && (
+          <div style={{ padding: '8px 12px', borderTop: '1px solid rgba(148,163,184,0.16)', fontSize: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <strong><Eye size={13} style={{ verticalAlign: 'text-bottom', marginRight: 5 }}/>{extreme.vision.caption}</strong>
+              <span className="badge sev-info">{Math.round(extreme.vision.activePatchRatio * 100)}% visual density</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(32, 1fr)', gap: 2, height: 6 }}>
+              {extreme.vision.heatmap64.slice(0, 32).map((val, idx) => (
+                <div
+                  key={idx}
+                  title={`Patch ${idx + 1} contrast: ${val}%`}
+                  style={{
+                    background: val > 40 ? '#38bdf8' : val > 15 ? '#64748b' : 'rgba(148,163,184,0.18)',
+                    borderRadius: 2,
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   </section>

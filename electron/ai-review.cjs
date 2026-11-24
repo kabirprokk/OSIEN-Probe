@@ -2,6 +2,10 @@
 
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { exec } = require('node:child_process');
+const { promisify } = require('node:util');
+const { parse: babelParse } = require('@babel/parser');
+const execAsync = promisify(exec);
 const {
   isCloudProvider,
   getProviderMeta,
@@ -440,7 +444,30 @@ async function generateFileBatchFixes(root, relativeFile, findings, options = {}
   return validPatches;
 }
 
-async function applyFindingFix(root, relativeFile, target, replacement) {
+function verifyPatchedSyntax(relativeFile, updatedContent) {
+  const ext = path.extname(relativeFile || '').toLowerCase();
+  if (ext === '.json') {
+    try {
+      JSON.parse(updatedContent);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: `Invalid JSON after patch: ${err.message}` };
+    }
+  }
+  if (['.js', '.jsx', '.ts', '.tsx', '.cjs', '.mjs'].includes(ext)) {
+    const plugins = ['jsx', 'decorators-legacy', 'classProperties', 'dynamicImport', 'optionalChaining', 'nullishCoalescingOperator', 'topLevelAwait'];
+    if (ext === '.ts' || ext === '.tsx') plugins.push('typescript');
+    try {
+      babelParse(updatedContent, { sourceType: 'unambiguous', errorRecovery: false, plugins });
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: `Syntax error after patch: ${err.message}` };
+    }
+  }
+  return { ok: true };
+}
+
+async function applyFindingFix(root, relativeFile, target, replacement, options = {}) {
   const realRoot = await fs.realpath(root);
   const fullPath = path.resolve(realRoot, relativeFile);
   if (!isWithin(realRoot, fullPath)) throw new Error('Source path escapes project root.');
@@ -450,8 +477,33 @@ async function applyFindingFix(root, relativeFile, target, replacement) {
   const index = content.indexOf(target);
   if (index < 0) throw new Error('Target code snippet was not found in file; file may have changed.');
   const updated = content.slice(0, index) + replacement + content.slice(index + target.length);
+
+  // 1. Fast AST/JSON syntax guard before/after write
+  const syntax = verifyPatchedSyntax(relativeFile, updated);
+  if (!syntax.ok) {
+    return { applied: false, rolledBack: true, file: relativeFile, reason: syntax.error };
+  }
+
   await fs.writeFile(realFile, updated, 'utf8');
-  return { applied: true, file: relativeFile };
+
+  // 2. Optional test/build command verification with automatic rollback on failure
+  if (options.verifyCommand && typeof options.verifyCommand === 'string' && options.verifyCommand.trim()) {
+    try {
+      await execAsync(options.verifyCommand, { cwd: realRoot, timeout: options.timeoutMs || 60000, maxBuffer: 2 * 1024 * 1024 });
+    } catch (err) {
+      await fs.writeFile(realFile, content, 'utf8');
+      const output = String(err?.stderr || err?.stdout || err?.message || 'Verification failed').slice(0, 600);
+      return {
+        applied: false,
+        rolledBack: true,
+        file: relativeFile,
+        reason: `Verification command "${options.verifyCommand}" failed; file automatically rolled back.`,
+        verifyOutput: output,
+      };
+    }
+  }
+
+  return { applied: true, rolledBack: false, verified: Boolean(options.verifyCommand), file: relativeFile };
 }
 
 module.exports = {

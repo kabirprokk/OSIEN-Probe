@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
+const { analyzeFrameWithLocalVision } = require('./local-vision.cjs');
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -510,16 +511,23 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
   };
 
   try {
-    emit('log', { level: 'info', text: `PC profile: ${profile.cpuCores} cores, ${profile.totalMemGb} GB RAM (${profile.tier} tier · ${profile.maxSteps} autonomous steps)` });
-    const entry = await detectWebEntry(project.root);
-    if (entry.mode === 'missing-deps') {
-      throw new Error('Dependencies are not installed (missing node_modules and no built dist/index.html). Run "npm install" in this project or run a Traditional Test.');
-    }
-    emit('log', { level: 'info', text: entry.mode === 'npm' ? `Starting sandboxed dev server (${entry.command})…` : `Starting isolated static sandbox server on 127.0.0.1…` });
+    emit('log', { level: 'info', text: `PC profile: ${profile.cpuCores} cores, ${profile.totalMemGb} GB RAM (${profile.tier} tier · ${profile.maxSteps} autonomous steps + OSIEN Vision-22M AI)` });
+    const isRemoteUrl = /^https?:\/\//i.test(String(project.root || '').trim());
+    let server;
+    if (isRemoteUrl) {
+      server = { url: String(project.root).trim(), close: async () => {} };
+      emit('log', { level: 'info', text: `Connecting Extreme Live Sandbox & Vision-22M AI to ${server.url}…` });
+    } else {
+      const entry = await detectWebEntry(project.root);
+      if (entry.mode === 'missing-deps') {
+        throw new Error('Dependencies are not installed (missing node_modules and no built dist/index.html). Run "npm install" in this project or run a Traditional Test.');
+      }
+      emit('log', { level: 'info', text: entry.mode === 'npm' ? `Starting sandboxed dev server (${entry.command})…` : `Starting isolated static sandbox server on 127.0.0.1…` });
 
-    const server = entry.mode === 'npm'
-      ? await startNpmSandboxServer(project.root, entry.scriptName, (line) => emit('log', { level: 'server', text: line }))
-      : await startStaticSandboxServer(entry.entryDir);
+      server = entry.mode === 'npm'
+        ? await startNpmSandboxServer(project.root, entry.scriptName, (line) => emit('log', { level: 'server', text: line }))
+        : await startStaticSandboxServer(entry.entryDir);
+    }
     state.server = server;
     if (state.cancelled) return { cancelled: true };
 
@@ -531,13 +539,14 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
       `http://127.0.0.1${targetPort ? `:${targetPort}` : ''}`,
       `http://[::1]${targetPort ? `:${targetPort}` : ''}`,
     ]);
-    emit('log', { level: 'info', text: `Sandbox live at ${server.url} — external network blocked` });
+    emit('log', { level: 'info', text: `Sandbox live at ${server.url} — Vision-22M visual perception active` });
 
     const blockedOrigins = new Set();
     const sandboxSession = session.fromPartition(`osien-sandbox-${project.id}-${Date.now()}`, { cache: false });
     sandboxSession.webRequest.onBeforeRequest((details, callback) => {
       const u = details.url || '';
-      const allowed = [...allowedOrigins].some((o) => u.startsWith(o)) || u.startsWith('data:') || u.startsWith('blob:') || u.startsWith('devtools:');
+      const isStaticAsset = isRemoteUrl && ['stylesheet', 'script', 'image', 'font', 'media'].includes(details.resourceType);
+      const allowed = isStaticAsset || [...allowedOrigins].some((o) => u.startsWith(o)) || u.startsWith('data:') || u.startsWith('blob:') || u.startsWith('devtools:');
       if (!allowed) {
         try {
           const origin = new URL(u).origin;
@@ -651,6 +660,7 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
 
     let clicks = 0;
     let inputsFuzzed = 0;
+    let prevVisionEmbedding = null;
     const routes = new Set([server.url]);
 
     for (let step = 0; step < profile.maxSteps; step++) {
@@ -677,11 +687,65 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
 
       if (!win.isDestroyed()) {
         try {
+          const domMetrics = await win.webContents.executeJavaScript(`(() => {
+            const imgs = [...document.querySelectorAll('img')];
+            const broken = imgs.filter(img => img.complete && img.naturalWidth === 0 && img.getAttribute('src'));
+            const controls = [...document.querySelectorAll('button, input, select, a[href]')].filter(el => {
+              const r = el.getBoundingClientRect();
+              return r.width > 4 && r.height > 4 && getComputedStyle(el).visibility !== 'hidden';
+            });
+            let overlaps = 0;
+            let overlapSummary = '';
+            for (let i = 0; i < Math.min(controls.length, 25); i++) {
+              const a = controls[i].getBoundingClientRect();
+              for (let j = i + 1; j < Math.min(controls.length, 25); j++) {
+                if (controls[i].contains(controls[j]) || controls[j].contains(controls[i])) continue;
+                const b = controls[j].getBoundingClientRect();
+                const ix = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+                const iy = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+                if (ix * iy > 140) {
+                  overlaps++;
+                  if (!overlapSummary) overlapSummary = (controls[i].innerText || controls[i].tagName) + ' overlaps ' + (controls[j].innerText || controls[j].tagName);
+                }
+              }
+            }
+            return {
+              brokenImages: broken.length,
+              brokenImageSrc: broken[0]?.getAttribute('src') || '',
+              overlappingControls: overlaps,
+              overlapSummary: overlapSummary.slice(0, 120),
+            };
+          })()`, true).catch(() => ({}));
+
           const frame = await win.webContents.capturePage();
           const jpeg = frame.resize({ width: 760, quality: 'good' }).toJPEG(72);
-          emit('frame', { dataUrl: `data:image/jpeg;base64,${jpeg.toString('base64')}` });
-        } catch {
-          // Ignore transient capture errors during navigation.
+          const visionSample = frame.resize({ width: 256, height: 160, quality: 'good' });
+          const vSize = visionSample.getSize();
+          const visionReport = analyzeFrameWithLocalVision({
+            rgbaBuffer: visionSample.toBitmap(),
+            width: vSize.width,
+            height: vSize.height,
+            prevEmbedding: prevVisionEmbedding,
+            domMetrics,
+          });
+          prevVisionEmbedding = visionReport.embedding;
+          for (const vf of visionReport.findings) pushFinding(vf);
+          if (step % 4 === 0) {
+            emit('log', { level: 'info', text: visionReport.caption });
+          }
+          emit('frame', {
+            dataUrl: `data:image/jpeg;base64,${jpeg.toString('base64')}`,
+            vision: {
+              caption: visionReport.caption,
+              activePatchRatio: visionReport.activePatchRatio,
+              dominantBrightness: visionReport.dominantBrightness,
+              contrastStd: visionReport.contrastStd,
+              visualDelta: visionReport.visualDelta,
+              heatmap64: visionReport.heatmap64,
+            },
+          });
+        } catch (err) {
+          void err;
         }
       }
       await new Promise((r) => setTimeout(r, profile.stepDelayMs));

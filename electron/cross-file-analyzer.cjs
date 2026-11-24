@@ -151,7 +151,8 @@ async function analyzeCrossFileProject(jsFiles, helpers, scanRoot = '') {
   const { makeFinding, parseSuppressions, isSuppressed } = helpers;
   const findings = [];
   let checksRun = 0;
-  if (!Array.isArray(jsFiles) || jsFiles.length === 0) return { findings, checksRun };
+  const safeJsFiles = Array.isArray(jsFiles) ? jsFiles : [];
+  if (safeJsFiles.length === 0 && !scanRoot) return { findings, checksRun };
   const aliasPrefixes = await loadAliasPrefixes(scanRoot);
 
   // 1. Parse all JS/TS files once and index exports, routes, API calls, and module-level state.
@@ -160,7 +161,7 @@ async function analyzeCrossFileProject(jsFiles, helpers, scanRoot = '') {
   const backendRoutes = new Map(); // routePath -> { file, line, bodyKeys: Set<string> }
   const frontendCalls = []; // { file, line, routePath, keys: string[] }
 
-  for (const entry of jsFiles) {
+  for (const entry of safeJsFiles) {
     const ast = parseJsAst(entry.raw, entry.extName);
     if (!ast) continue;
     const relNorm = entry.rel.replace(/\\/g, '/');
@@ -653,6 +654,230 @@ async function analyzeCrossFileProject(jsFiles, helpers, scanRoot = '') {
           confidence: 'high',
           hint: 'Pick explicit scalar fields (e.g. { email: String(req.body.email) }) instead of passing raw req.body/req.query to Mongoose/Mongo.',
         }, i + 1, lineStr, 'Passing raw req.body/req.query allows attackers to inject $ne, $gt, or $regex operators.');
+      }
+    }
+  }
+
+  // 5. Real-world 100+ concurrent user & production scalability/race detectors
+  const ATOMIC_GUARD_RE = /(?:\$transaction|\.transaction\s*\(|FOR\s+UPDATE|\$inc\b|\.increment\s*\(|\.decrement\s*\(|BEGIN\s+(?:IMMEDIATE|TRANSACTION)|serializable|optimistic|version\b|etag\b)/i;
+  const RATE_LIMIT_RE = /(?:rateLimit|rateLimiter|limiter|slowDown|throttle|ratelimit|Upstash|turnstile|hcaptcha|recaptcha|429)/i;
+  const AUTH_ENDPOINT_RE = /['"`]\/(?:api\/)?(?:login|signin|sign-in|register|signup|sign-up|otp|verify|reset-password|forgot-password)['"`]/i;
+  const UNBOUNDED_DB_FIND_RE = /\.\s*(?:findMany|find|findAll)\s*\(\s*(?:\{\s*\})?\s*\)/;
+  const PAGINATION_RE = /\b(?:take|limit|page|perPage|pageSize|range|slice|offset|cursor)\b/i;
+
+  for (const pf of parsedFiles) {
+    const raw = pf.entry.raw;
+    const lines = raw.split(/\r?\n/);
+    const isTest = /(?:^|\/)(?:tests?|__tests__|spec|scripts?|electron|bin)\/|\.(?:test|spec)\./i.test(pf.relNorm);
+    if (isTest) continue;
+
+    // 5a. Non-atomic read-modify-write across await (double-spend / oversell race under 100+ users)
+    checksRun++;
+    walk(pf.ast, (node) => {
+      if ((node.type !== 'FunctionDeclaration' && node.type !== 'FunctionExpression' && node.type !== 'ArrowFunctionExpression') || !node.async || !node.body) return;
+      const fnSrc = raw.slice(node.start, node.end);
+      if (ATOMIC_GUARD_RE.test(fnSrc)) return;
+      const readM = fnSrc.match(/await\s+[^\n;]*\.(?:findOne|findUnique|findFirst|get|select|query)\s*\([^)]*\)[^\n]*[\r\n]+[\s\S]{0,400}?\b(?:balance|stock|inventory|credits|seats|qty|quantity|count|wallet|points)\b[^\n;]*(?:[-+]|-=|\+=)[\s\S]{0,400}?await\s+[^\n;]*\.(?:update|save|set|query)\s*\(/i);
+      if (readM) {
+        const line = node.loc?.start.line || 1;
+        pushFinding(pf, {
+          id: 'js-non-atomic-read-modify-write',
+          title: 'Non-atomic read-modify-write across await (race condition under concurrent users)',
+          severity: 'high',
+          cwe: 'CWE-362',
+          confidence: 'high',
+          hint: 'Wrap read-modify-write balance/inventory updates in a database transaction ($transaction / FOR UPDATE) or use atomic $inc/decrement operations.',
+        }, line, lines[line - 1] || '', 'Reads mutable balance/stock before await and writes computed result afterward without a transaction or atomic update.');
+      }
+    });
+
+    // 5b. Unbounded module-level Map/Set cache mutated per request/user without eviction
+    checksRun++;
+    const cacheNames = new Set();
+    for (const stmt of pf.ast.program?.body || []) {
+      if (stmt.type === 'VariableDeclaration') {
+        for (const d of stmt.declarations || []) {
+          if (d.id?.type === 'Identifier' && d.init?.type === 'NewExpression' && /^(?:Map|Set)$/.test(d.init.callee?.name || '')) {
+            cacheNames.add(d.id.name);
+          }
+        }
+      }
+    }
+    if (cacheNames.size > 0 && !/\b(?:LRUCache|maxSize|MAX_|ttl|TTL|evict|\.clear\s*\()/.test(raw)) {
+      for (const cName of cacheNames) {
+        const escaped = cName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const mutRe = new RegExp(`\\b${escaped}\\.(?:set|add)\\s*\\(\\s*(?:req\\.|request\\.|userId|ip|sessionId|token|key|id\\b)`);
+        const delRe = new RegExp(`\\b${escaped}\\.delete\\s*\\(`);
+        if (!delRe.test(raw)) {
+          for (let i = 0; i < lines.length; i++) {
+            if (mutRe.test(lines[i])) {
+              pushFinding(pf, {
+                id: 'js-unbounded-memory-map',
+                title: `Unbounded in-memory ${cName} grows per user/request without eviction`,
+                severity: 'medium',
+                cwe: 'CWE-400',
+                confidence: 'medium',
+                hint: `Add a maxSize/TTL eviction policy (or use Redis / LRUCache) so "${cName}" does not OOM under 100+ / 10,000+ users.`,
+              }, i + 1, lines[i], `Module-level "${cName}" stores per-user/request keys without delete/eviction/maxSize.`);
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    // 5c. Missing rate limiting on auth/OTP/password-reset route handlers
+    checksRun++;
+    if (/(?:app|router|fastify)\.(?:post|all)\s*\(/i.test(raw) && !RATE_LIMIT_RE.test(raw)) {
+      for (let i = 0; i < lines.length; i++) {
+        if (/(?:app|router|fastify)\.(?:post|all)\s*\(/.test(lines[i]) && AUTH_ENDPOINT_RE.test(lines[i])) {
+          pushFinding(pf, {
+            id: 'js-missing-rate-limit-auth',
+            title: 'Auth / credential endpoint lacks rate limiting against brute-force or bot bursts',
+            severity: 'medium',
+            cwe: 'CWE-307',
+            confidence: 'medium',
+            hint: 'Attach rate-limiting middleware (e.g. express-rate-limit) to login, signup, OTP, and password-reset endpoints.',
+          }, i + 1, lines[i], 'Authentication/OTP route handler has no rate-limiter middleware in scope.');
+        }
+      }
+    }
+
+    // 5d. Unbounded DB findMany/find/findAll inside route handlers (no limit/take/pagination)
+    checksRun++;
+    if (/(?:app|router|fastify)\.(?:get|post)\s*\(/i.test(raw)) {
+      for (let i = 0; i < lines.length; i++) {
+        if (UNBOUNDED_DB_FIND_RE.test(lines[i])) {
+          const ctx = lines.slice(Math.max(0, i - 2), Math.min(lines.length, i + 4)).join('\n');
+          if (!PAGINATION_RE.test(ctx)) {
+            pushFinding(pf, {
+              id: 'js-missing-db-pagination',
+              title: 'Unbounded database query without limit/take/pagination',
+              severity: 'medium',
+              cwe: 'CWE-770',
+              confidence: 'medium',
+              hint: 'Pass explicit take/limit/pagination parameters to avoid loading entire tables under concurrent user traffic.',
+            }, i + 1, lines[i], 'Database find/findMany/findAll called without limit, take, or pagination bounds.');
+          }
+        }
+      }
+    }
+
+    // 5e. Unthrottled Promise.all(arr.map(...)) in request handlers (connection pool exhaustion)
+    checksRun++;
+    if (/(?:req\.|request\.|app\.|router\.|export\s+async\s+function\s+(?:GET|POST|PUT|DELETE))/.test(raw) && !/\b(?:pLimit|pMap|chunk|batch|CONCURRENCY|Promise\.allSettled)\b/.test(raw)) {
+      for (let i = 0; i < lines.length; i++) {
+        if (/Promise\.all\s*\(\s*[a-zA-Z_$][a-zA-Z0-9_$.]*\.map\s*\(/.test(lines[i])) {
+          pushFinding(pf, {
+            id: 'js-unhandled-concurrent-promise-all',
+            title: 'Unbounded Promise.all(items.map(...)) can exhaust pools or fail-fast under load',
+            severity: 'medium',
+            cwe: 'CWE-755',
+            confidence: 'medium',
+            hint: 'Cap concurrency (e.g. p-limit / batching) or use Promise.allSettled when fanning out per-item async work.',
+          }, i + 1, lines[i], 'Unbounded Promise.all(.map(...)) in request/API code without concurrency limit or allSettled.');
+        }
+      }
+    }
+    // 5f. Drizzle ORM schema checks (float money columns & missing unique on idempotencyKey)
+    if (/\b(?:pgTable|mysqlTable|sqliteTable)\s*\(/.test(raw)) {
+      checksRun++;
+      for (let i = 0; i < lines.length; i++) {
+        if (/\b(?:real|doublePrecision|float)\s*\(\s*['"](?:balance|amount|price|credit|credits|total|fee|payout)['"]/i.test(lines[i])) {
+          pushFinding(pf, {
+            id: 'schema-float-money-column',
+            title: 'ORM schema stores monetary column as floating-point (real/doublePrecision/float)',
+            severity: 'medium',
+            cwe: 'CWE-682',
+            confidence: 'high',
+            hint: 'Use integer cents (integer/bigint) or exact decimal/numeric columns for currency and balance fields.',
+          }, i + 1, lines[i], 'Floating-point currency columns cause IEEE-754 rounding drift under concurrent transactions.');
+        }
+        if (/['"](?:idempotency_key|idempotencyKey)['"]/.test(lines[i]) && !/\.unique\s*\(|uniqueIndex/.test(lines.slice(i, Math.min(lines.length, i + 3)).join(' '))) {
+          pushFinding(pf, {
+            id: 'schema-missing-unique-constraint',
+            title: 'Schema idempotencyKey column lacks a unique constraint (.unique())',
+            severity: 'medium',
+            cwe: 'CWE-362',
+            confidence: 'high',
+            hint: 'Add .unique() to idempotencyKey so concurrent duplicate requests are rejected atomically by the database.',
+          }, i + 1, lines[i], 'idempotencyKey column without a unique index cannot prevent race-condition duplicate inserts.');
+        }
+      }
+    }
+  }
+
+  // 6. Prisma Schema (schema.prisma) & OpenAPI (openapi.json) concurrency/security cross-checks
+  if (scanRoot) {
+    for (const relCandidate of ['prisma/schema.prisma', 'schema.prisma']) {
+      try {
+        const prismaRaw = await fs.readFile(path.join(scanRoot, relCandidate), 'utf8');
+        const pLines = prismaRaw.split(/\r?\n/);
+        const pSup = parseSuppressions ? parseSuppressions(pLines) : new Map();
+        checksRun++;
+
+        for (const m of prismaRaw.matchAll(/model\s+([A-Za-z0-9_]+)\s*\{([\s\S]*?)\n\}/g)) {
+          const modelName = m[1];
+          const body = m[2];
+          const startLine = prismaRaw.slice(0, m.index).split(/\r?\n/).length;
+          const bodyLines = body.split(/\r?\n/);
+
+          for (let idx = 0; idx < bodyLines.length; idx++) {
+            const bLine = bodyLines[idx];
+            const absLine = startLine + idx;
+            // 6a. Float money column in Prisma model
+            if (/^\s*(?:balance|amount|price|credit|credits|total|fee|payout)\s+Float\b/i.test(bLine)) {
+              if (!isSuppressed || !isSuppressed(pSup, absLine, 'schema-float-money-column')) {
+                findings.push({
+                  ...makeFinding({
+                    id: 'schema-float-money-column',
+                    title: `Prisma model "${modelName}" stores monetary field as Float instead of Decimal/Int`,
+                    severity: 'medium',
+                    cwe: 'CWE-682',
+                    hint: 'Use Decimal (@db.Decimal) or Int (minor currency units/cents) for financial fields in schema.prisma.',
+                  }, relCandidate, absLine, bLine),
+                  confidence: 'high',
+                  reason: `Monetary field in model "${modelName}" uses IEEE-754 Float.`,
+                });
+              }
+            }
+            // 6b. idempotencyKey / eventId without @unique or @@unique
+            if (/^\s*(?:idempotencyKey|webhookEventId|txHash)\s+String\b/.test(bLine) && !/@unique\b/.test(bLine) && !/@@unique\s*\([^)]*(?:idempotencyKey|webhookEventId|txHash)/.test(body)) {
+              if (!isSuppressed || !isSuppressed(pSup, absLine, 'schema-missing-unique-constraint')) {
+                findings.push({
+                  ...makeFinding({
+                    id: 'schema-missing-unique-constraint',
+                    title: `Prisma model "${modelName}" defines idempotency/event key without @unique`,
+                    severity: 'medium',
+                    cwe: 'CWE-362',
+                    hint: 'Mark idempotencyKey / webhookEventId / txHash with @unique to enforce database-level race protection.',
+                  }, relCandidate, absLine, bLine),
+                  confidence: 'high',
+                  reason: `Idempotency field in model "${modelName}" lacks @unique / @@unique constraint.`,
+                });
+              }
+            }
+            // 6c. onDelete: Cascade on financial/audit ledger models
+            if (/^(?:Order|Payment|Transaction|Ledger|Invoice|AuditLog|Payout)s?$/i.test(modelName) && /onDelete\s*:\s*Cascade\b/.test(bLine)) {
+              if (!isSuppressed || !isSuppressed(pSup, absLine, 'schema-cascade-delete-ledger')) {
+                findings.push({
+                  ...makeFinding({
+                    id: 'schema-cascade-delete-ledger',
+                    title: `Prisma financial/audit model "${modelName}" uses onDelete: Cascade`,
+                    severity: 'medium',
+                    cwe: 'CWE-284',
+                    hint: 'Use onDelete: Restrict or SetNull on financial and audit ledger relations so deleting a user preserves records.',
+                  }, relCandidate, absLine, bLine),
+                  confidence: 'high',
+                  reason: `onDelete: Cascade on "${modelName}" can silently destroy financial/audit records.`,
+                });
+              }
+            }
+          }
+        }
+        break;
+      } catch (err) {
+        void err;
       }
     }
   }

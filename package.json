@@ -1,7 +1,7 @@
 {
   "name": "osien-probe",
   "private": true,
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Local static analysis, multi-language AST bug finder, and AI-assisted finding reviewer.",
   "author": "OSIEN <hello@osien.dev>",
   "license": "MIT",
@@ -13,6 +13,7 @@
     "osien-probe-mcp": "./bin/osien-probe-mcp.cjs"
   },
   "scripts": {
+    "start": "electron .",
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
     "web": "vite",
     "build": "tsc -b && vite build",
@@ -64,7 +65,10 @@
   "build": {
     "appId": "dev.osien.probe",
     "productName": "OSIEN Probe",
-    "compression": "normal",
+    "compression": "maximum",
+    "electronLanguages": [
+      "en-US"
+    ],
     "directories": {
       "output": "release"
     },
@@ -76,7 +80,16 @@
       "electron/**/*",
       "bin/**/*",
       "build/**/*",
-      "skills/**/*"
+      "skills/**/*",
+      "!node_modules/@ast-grep/**/src/**",
+      "!node_modules/@ast-grep/**/prebuilds/prebuild-macOS*/**",
+      "!node_modules/@ast-grep/**/prebuilds/prebuild-Linux*/**",
+      "!node_modules/@ast-grep/**/prebuilds/prebuild-Windows-ARM64/**",
+      "!node_modules/lucide-react/**",
+      "!node_modules/gsap/**",
+      "!node_modules/@gsap/**",
+      "!node_modules/react/**",
+      "!node_modules/react-dom/**"
     ],
     "win": {
       "icon": "build/icon.ico",

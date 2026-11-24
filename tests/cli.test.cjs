@@ -12,7 +12,7 @@ const execFileAsync = promisify(execFile);
 const { TOOLS, handleToolCall } = require('../bin/osien-probe-mcp.cjs');
 const cliPath = path.resolve(__dirname, '..', 'bin', 'osien-probe.cjs');
 
-test('osien-probe CLI scans a project and honors --json and --fail-on', async (t) => {
+test('Praeco · CLI scan, --json & --fail-on', async (t) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'osien-probe-cli-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   await fs.writeFile(path.join(dir, 'bug.js'), "'use strict';\neval(userInput);\n", 'utf8');
@@ -28,7 +28,7 @@ test('osien-probe CLI scans a project and honors --json and --fail-on', async (t
   );
 });
 
-test('osien-probe MCP server exposes scan_project, inspect_finding_context, and list_rules', async (t) => {
+test('Legatus · MCP server tools & scan_project', async (t) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'osien-probe-mcp-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));
   await fs.writeFile(path.join(dir, 'app.js'), "'use strict';\nconst x = 1;\neval(input);\n", 'utf8');

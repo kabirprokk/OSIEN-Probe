@@ -8,7 +8,7 @@ const path = require('node:path');
 
 const { scanProjectRoot } = require('../electron/scanner.cjs');
 
-test('dependency auditor detects vulnerable npm, Python, and Go packages and ignores patched versions', async () => {
+test('Custos I · CVE auditor on npm, Python & Go lockfiles', async () => {
   const vulnDir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-dep-vuln-'));
   await fs.writeFile(path.join(vulnDir, 'package.json'), JSON.stringify({
     name: 'vuln-app',
@@ -26,7 +26,7 @@ test('dependency auditor detects vulnerable npm, Python, and Go packages and ign
   assert.ok(ids.has('dep-go-jwt-go-deprecated'), 'flags deprecated jwt-go');
 });
 
-test('semantic polyglot detects Solidity CEI reentrancy, unprotected init, and Python/Go taint', async () => {
+test('Custos II · Solidity CEI reentrancy & Python/Go taint', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-sem-'));
   await fs.writeFile(path.join(dir, 'Vault.sol'), [
     'pragma solidity ^0.8.20;',
@@ -70,7 +70,7 @@ test('semantic polyglot detects Solidity CEI reentrancy, unprotected init, and P
   assert.equal(safeWithdrawFlags.length, 0, 'does not flag nonReentrant safeWithdraw');
 });
 
-test('monorepo lockfile CVE audit and Python/Go cross-file taint detection', async () => {
+test('Custos III · monorepo lockfile CVE & cross-file taint', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-xpoly-'));
   await fs.mkdir(path.join(dir, 'packages', 'web'), { recursive: true });
   await fs.writeFile(path.join(dir, 'packages', 'web', 'package-lock.json'), JSON.stringify({
@@ -90,7 +90,7 @@ test('monorepo lockfile CVE audit and Python/Go cross-file taint detection', asy
   assert.ok(ids.has('go-crossfile-taint'), 'detects Go cross-file taint');
 });
 
-test('real-world false-positive regression guard (JSX attrs, JSON-LD, model.eval, platform.system, .env.local.example)', async () => {
+test('Custos IV · JSX, JSON-LD & model.eval false-positive guard', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-fp-guard-'));
   await fs.writeFile(path.join(dir, '.env.local.example'), 'NEXT_PUBLIC_SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.demo"\n');
   await fs.writeFile(path.join(dir, 'JsonLd.tsx'), [
@@ -113,7 +113,7 @@ test('real-world false-positive regression guard (JSX attrs, JSON-LD, model.eval
   assert.equal(report.findings.length, 0, `expected 0 false positives, got: ${report.findings.map((f) => `${f.ruleId}:${f.line}`).join(', ')}`);
 });
 
-test('deep security detectors: timing-unsafe compare, mass assignment, unawaited !async(), Next.js & Python missing route auth', async () => {
+test('Custos V · timing compare, mass assign & route auth', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-deepsec-'));
   await fs.mkdir(path.join(dir, 'src', 'app', 'api', 'admin'), { recursive: true });
   await fs.writeFile(path.join(dir, 'src', 'app', 'api', 'admin', 'route.ts'), [
@@ -147,7 +147,7 @@ test('deep security detectors: timing-unsafe compare, mass assignment, unawaited
   assert.ok(ids.has('py-route-missing-auth'), 'detects Python mutating route without auth');
 });
 
-test('Driftpost false-positive regression guard (HMAC .update, guarded cache/name, ternary math, delete obj[p], service_role)', async () => {
+test('Custos VI · HMAC, guarded cache & service_role guard', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-driftpost-fp-'));
   await fs.writeFile(path.join(dir, 'webhook.js'), [
     'const expected = crypto.createHmac("sha256", secret).update(req.body).digest("hex");',
@@ -174,7 +174,7 @@ test('Driftpost false-positive regression guard (HMAC .update, guarded cache/nam
   assert.equal(fp.length, 0, `expected 0 false positives, got: ${fp.map((f) => `${f.ruleId}:${f.line}`).join(', ')}`);
 });
 
-test('Type-aware + CFG + Router-tree + Reachable Lockfile/OSV + AST Polyglot engine upgrades', async () => {
+test('Custos VII · Type-CFG, router tree & OSV reachability', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-nextgen-'));
   await fs.writeFile(path.join(dir, 'vault.js'), 'export async function saveVault(v) { return v; }\n');
   await fs.writeFile(path.join(dir, 'app.js'), [
@@ -226,7 +226,7 @@ test('Type-aware + CFG + Router-tree + Reachable Lockfile/OSV + AST Polyglot eng
   assert.ok(!ids.has('py-taint-sink'), 'clears Python taint after shlex.quote');
 });
 
-test('Real-world gap fixes: YAML comments, .gen.ts skip, ??= return, promise-executor dedupe, nested postMessage origin, and .d.ts Promise indexing', async () => {
+test('Custos VIII · YAML comments, .gen.ts & postMessage guard', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-realgaps-'));
   await fs.mkdir(path.join(dir, '.github', 'workflows'), { recursive: true });
   await fs.writeFile(path.join(dir, '.github', 'workflows', 'ci.yml'), [
@@ -260,7 +260,7 @@ test('Real-world gap fixes: YAML comments, .gen.ts skip, ??= return, promise-exe
   assert.equal(promiseFindings.length, 1, 'collapses duplicate async-promise-executor rules on same line');
 });
 
-test('Expanded framework & polyglot detectors: Next.js Server Actions, SSRF taint, NoSQL injection, Go path traversal, Rust SQL/shell', async () => {
+test('Custos IX · Next.js Server Actions, SSRF & NoSQLi', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-expanded-'));
   await fs.writeFile(path.join(dir, 'actions.ts'), [
     '"use server";',
@@ -300,7 +300,7 @@ test('Expanded framework & polyglot detectors: Next.js Server Actions, SSRF tain
   assert.ok(ids.has('rust-cmd-shell-taint') || ids.has('polyglot-rust-shell'), 'detects Rust Command::new("sh").arg("-c").arg(id)');
 });
 
-test('Live Web Auditor checks HTTP headers, cookies, and HTML without data-id or rel-before-target false positives', async () => {
+test('Custos X · Live Web Auditor HTTP headers & cookies', async () => {
   const http = require('node:http');
   const { scanLiveUrl } = require('../electron/web-auditor.cjs');
   const html = [
@@ -339,7 +339,7 @@ test('Live Web Auditor checks HTTP headers, cookies, and HTML without data-id or
   }
 });
 
-test('AST-aware rules eliminate false positives on __proto__ guards and standard window/comparison usage', async () => {
+test('Custos XI · AST proto guard & comparison checks', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-ast-noise-'));
   await fs.writeFile(path.join(dir, 'safe.js'), [
     'export function mergeSafe(target, src) {',
@@ -369,7 +369,7 @@ test('AST-aware rules eliminate false positives on __proto__ guards and standard
   assert.ok(unsafeFindings.some((f) => f.ruleId === 'lib-global-window-mutation'), 'still catches custom window.* global mutation');
 });
 
-test('AST-backed interprocedural call graph traces multi-hop taint across Python, Go, and Rust files', async () => {
+test('Custos XII · Python, Go & Rust AST call-graph taint', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-polyglot-cg-'));
   // Python 2-hop: handler.py -> mid.py -> sink.py
   await fs.writeFile(path.join(dir, 'sink.py'), [
@@ -428,7 +428,7 @@ test('AST-backed interprocedural call graph traces multi-hop taint across Python
   assert.ok(ids.has('rust-crossfile-taint'), 'detects Rust interprocedural call-graph taint');
 });
 
-test('Expanded Web Auditor detects CORS misconfigurations, Server version, and exposed .git/HEAD & .env', async () => {
+test('Custos XIII · Web Auditor CORS & exposed .git/.env', async () => {
   const http = require('node:http');
   const { scanLiveUrl, analyzeHttpHeaders } = require('../electron/web-auditor.cjs');
 
@@ -476,7 +476,7 @@ test('Expanded Web Auditor detects CORS misconfigurations, Server version, and e
   }
 });
 
-test('Live Website Fix Generator (generateWebRemediation) and SRI / HttpOnly checks', async () => {
+test('Custos XIV · Live Web Fix Generator & SRI/HttpOnly', async () => {
   const http = require('node:http');
   const { scanLiveUrl, generateWebRemediation } = require('../electron/web-auditor.cjs');
   const html = [
@@ -519,7 +519,7 @@ test('Live Website Fix Generator (generateWebRemediation) and SRI / HttpOnly che
   }
 });
 
-test('Minified JS skip, CFG loop-shadowing/short-circuit guard, and multi-line Go/Rust AST taint', async () => {
+test('Custos XV · minified JS skip & CFG loop narrowing', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-cycle3-'));
   // 1. Minified vendor bundle (>4000 bytes, single long line) should be skipped cleanly
   const minified = 'var a=1;' + 'x=eval("1");'.repeat(400);
@@ -565,7 +565,7 @@ test('Minified JS skip, CFG loop-shadowing/short-circuit guard, and multi-line G
   assert.ok(report.findings.some((f) => f.ruleId === 'rust-cmd-shell-taint' || f.ruleId === 'polyglot-rust-shell'), 'catches multi-line Rust AST shell taint');
 });
 
-test('Java/PHP AST call graphs, CFG compound || early-return narrowing, and TLS inspector', async () => {
+test('Custos XVI · Java/PHP AST call graphs & TLS inspector', async () => {
   const { inspectTlsCertificate } = require('../electron/web-auditor.cjs');
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-cycle4-'));
 
@@ -620,7 +620,7 @@ test('Java/PHP AST call graphs, CFG compound || early-return narrowing, and TLS 
   assert.deepEqual(nonTls, []);
 });
 
-test('Ruby/Kotlin AST call graphs and Live Web Auditor multi-page crawl & CORS reflection probe', async () => {
+test('Custos XVII · Ruby/Kotlin AST call graphs & Web crawl', async () => {
   const http = require('node:http');
   const { scanLiveUrl } = require('../electron/web-auditor.cjs');
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-cycle5-'));
@@ -690,7 +690,7 @@ test('Ruby/Kotlin AST call graphs and Live Web Auditor multi-page crawl & CORS r
   }
 });
 
-test('C/C++ and Swift AST-backed interprocedural call-graph taint detection', async () => {
+test('Custos XVIII · C/C++ & Swift AST call-graph taint', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-v105-'));
 
   await fs.writeFile(path.join(dir, 'exec.cpp'), [

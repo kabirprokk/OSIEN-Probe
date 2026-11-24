@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { parseVerdict, getSourceContext, verifyFinding, reviewFindings, checkAiHealth, MODEL } = require('../electron/ai-review.cjs');
 
-test('validates supported JSON verdicts and bounds fields', () => {
+test('Oraculum · validates JSON verdicts', () => {
   const parsed = parseVerdict(JSON.stringify({ verdict: 'likely_real', confidence: 150, rationale: 'Evidence found', evidence: 'line 2' }));
   assert.equal(parsed.verdict, 'likely_real');
   assert.equal(parsed.confidence, 100);
@@ -19,7 +19,7 @@ test('validates supported JSON verdicts and bounds fields', () => {
   assert.throws(() => parseVerdict('{"verdict":"uncertain"}'), /no explanation/);
 });
 
-test('source context cannot escape project via traversal or symlink', async (t) => {
+test('Terminus · blocks path traversal & symlinks', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-ai-'));
   const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-out-'));
   t.after(() => Promise.all([fs.rm(root, { recursive: true, force: true }), fs.rm(outside, { recursive: true, force: true })]));
@@ -35,7 +35,7 @@ test('source context cannot escape project via traversal or symlink', async (t) 
   }
 });
 
-test('sends a local CPU-only Ollama request and parses response', async (t) => {
+test('Minerva · local CPU Ollama chat & parse', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-ai-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.writeFile(path.join(root, 'app.js'), 'const value = input;');
@@ -54,7 +54,7 @@ test('sends a local CPU-only Ollama request and parses response', async (t) => {
   assert.equal(result.confidence, 50);
 });
 
-test('automatically reviews findings in separate fresh, snippet-only requests', async (t) => {
+test('Vigilia · snippet-only auto AI review', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-ai-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const source = Array.from({ length: 20 }, (_, index) => `const line${index + 1} = 1;`);
@@ -83,7 +83,7 @@ test('automatically reviews findings in separate fresh, snippet-only requests', 
   assert.ok(findings.every((finding) => finding.aiAssessment.confidence === 50));
 });
 
-test('circuit-breaks remaining findings when local Ollama endpoint is offline', async (t) => {
+test('Clausura · circuit-breaks when Ollama offline', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-ai-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.writeFile(path.join(root, 'app.js'), 'const a = 1;\nconst b = 2;\nconst c = 3;\n');
@@ -104,7 +104,7 @@ test('circuit-breaks remaining findings when local Ollama endpoint is offline', 
   assert.ok(findings.every((f) => /Cannot reach Ollama/.test(f.aiReviewError)));
 });
 
-test('checkAiHealth reports online and model installation status', async () => {
+test('Salus · reports AI online & model status', async () => {
   const online = await checkAiHealth({
     fetch: async () => ({
       ok: true,
@@ -121,7 +121,7 @@ test('checkAiHealth reports online and model installation status', async () => {
   assert.equal(offline.modelInstalled, false);
 });
 
-test('Cloud Codex provider supports health, fix generation, and safe file patching', async () => {
+test('Aether · Cloud Codex health & safe patching', async () => {
   const { generateFindingFix, applyFindingFix, CODEX_MODELS } = require('../electron/ai-review.cjs');
   const noKey = await checkAiHealth({ provider: 'cloud-codex', apiKey: '', codexConnected: false });
   assert.equal(noKey.available, false);
@@ -166,7 +166,7 @@ test('Cloud Codex provider supports health, fix generation, and safe file patchi
   await assert.rejects(() => applyFindingFix(root, '../outside.js', 'a', 'b'), /escapes/);
 });
 
-test('Cloud Claude, OpenCode, and Pi providers support health and fix generation', async () => {
+test('Olympus · Claude, OpenCode & Pi fix generation', async () => {
   const { checkAiHealth: checkHealth, generateFindingFix } = require('../electron/ai-review.cjs');
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-providers-'));
   await fs.writeFile(path.join(root, 'app.js'), 'el.innerHTML = userBio;\n', 'utf8');

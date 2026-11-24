@@ -57,7 +57,7 @@ const CLEAN_SITE = `<!doctype html>
 </html>
 `;
 
-test('rule catalog is well formed and covers every category', () => {
+test('Specula I · valid rule catalog across categories', () => {
   for (const kind of kinds) {
     const catalog = rulesForKind(kind);
     assert.ok(catalog.length >= 120, `${kind} should have a broad catalog`);
@@ -69,7 +69,7 @@ test('rule catalog is well formed and covers every category', () => {
   }
 });
 
-test('detects the deliberate bugs in the broken website', async () => {
+test('Specula II · catches deliberate bugs in broken site', async () => {
   const root = await fixture({ 'index.html': VULNERABLE_SITE, 'app.js': "'use strict';\n" });
   const result = await scanProjectRoot(root, 'Website');
   const found = titles(result);
@@ -88,7 +88,7 @@ test('detects the deliberate bugs in the broken website', async () => {
   }
 });
 
-test('does not invent findings on clean source', async () => {
+test('Specula III · zero false findings on clean code', async () => {
   const root = await fixture({
     'index.html': CLEAN_SITE,
     'app.js': "'use strict';\nconst total = (a, b) => a + b;\nmodule.exports = { total };\n",
@@ -101,7 +101,7 @@ test('does not invent findings on clean source', async () => {
   assert.ok(!titles(result).includes('Unsafe HTML injection'));
 });
 
-test('reports the exact line a finding sits on', async () => {
+test('Specula IV · reports exact finding line number', async () => {
   const root = await fixture({
     'app.cjs': ["'use strict';", '', '// setup', 'eval(userInput);', ''].join('\n'),
   });
@@ -112,7 +112,7 @@ test('reports the exact line a finding sits on', async () => {
   assert.equal(finding.excerpt, 'eval(userInput);');
 });
 
-test('skips dependencies, build output and lockfiles', async () => {
+test('Specula V · skips node_modules, dist & lockfiles', async () => {
   const root = await fixture({
     'node_modules/left-pad/index.js': 'eval(hacked);\n',
     'dist/bundle.js': 'eval(hacked);\n',
@@ -123,7 +123,7 @@ test('skips dependencies, build output and lockfiles', async () => {
   assert.deepEqual(result.findings, []);
 });
 
-test('honors .deepcheckignore glob patterns', async () => {
+test('Specula VI · honors .deepcheckignore patterns', async () => {
   const root = await fixture({
     '.deepcheckignore': 'samples/**\n*.generated.js\n',
     'samples/broken.js': 'eval(input);\n',
@@ -136,7 +136,7 @@ test('honors .deepcheckignore glob patterns', async () => {
   assert.equal(result.findings.some((f) => f.file.includes('generated')), false);
 });
 
-test('supports file, line, and next-line rule suppressions', async () => {
+test('Specula VII · honors file, line & next-line suppressions', async () => {
   const root = await fixture({
     'file.cjs': [
       '// deepcheck-disable-file js-eval',
@@ -159,7 +159,7 @@ test('supports file, line, and next-line rule suppressions', async () => {
   assert.deepEqual(evalFindings.map((finding) => finding.excerpt), ['eval(shown);']);
 });
 
-test('reports provider secrets once and ignores obvious placeholders', async () => {
+test('Specula VIII · flags real secrets & ignores placeholders', async () => {
   const root = await fixture({
     'secrets.js': [
       "const apiKey = 'example';",
@@ -172,7 +172,7 @@ test('reports provider secrets once and ignores obvious placeholders', async () 
   assert.equal(result.findings.filter((f) => f.ruleId === 'secret-stripe-key').length, 0);
 });
 
-test('scanner is deterministic apart from duration and timestamp fields', async () => {
+test('Specula IX · deterministic scan output', async () => {
   const root = await fixture({ 'app.js': "'use strict';\neval(input);\n" });
   const first = await scanProjectRoot(root, 'Software');
   const second = await scanProjectRoot(root, 'Software');
@@ -182,7 +182,7 @@ test('scanner is deterministic apart from duration and timestamp fields', async 
   assert.equal(first.score, second.score);
 });
 
-test('uses source-to-sink context for HTML injection confidence', async () => {
+test('Specula X · source-to-sink HTML taint confidence', async () => {
   const root = await fixture({
     'unsafe.js': [
       "'use strict';",
@@ -199,7 +199,7 @@ test('uses source-to-sink context for HTML injection confidence', async () => {
   assert.match(htmlFindings[0].reason, /untrusted input/i);
 });
 
-test('does not treat security-looking words in comments as executable code', async () => {
+test('Specula XI · ignores security keywords inside comments', async () => {
   const root = await fixture({
     'app.js': [
       "'use strict';",
@@ -212,7 +212,7 @@ test('does not treat security-looking words in comments as executable code', asy
   assert.equal(result.findings.some((finding) => finding.ruleId === 'js-eval'), false);
 });
 
-test('does not scan JavaScript string literals as executable security issues', async () => {
+test('Specula XII · ignores JS string literals as code', async () => {
   const root = await fixture({
     'samples.js': [
       "const sample = 'eval(userInput);';",
@@ -226,7 +226,7 @@ test('does not scan JavaScript string literals as executable security issues', a
   ), []);
 });
 
-test('flags missing strict mode once per CommonJS file only', async () => {
+test('Specula XIII · flags missing strict mode once per CJS file', async () => {
   const root = await fixture({
     'loose.cjs': 'const a = 1;\nconst b = 2;\nconst c = 3;\n',
     'strict.cjs': "'use strict';\nconst a = 1;\n",
@@ -239,7 +239,7 @@ test('flags missing strict mode once per CommonJS file only', async () => {
   assert.equal(strictFindings[0].file, 'loose.cjs');
 });
 
-test('applies category rules only to the selected category', async () => {
+test('Specula XIV · applies category rules only to chosen kind', async () => {
   const files = { 'index.html': '<button onclick="go()">go</button>\n' };
   const website = await scanProjectRoot(await fixture(files), 'Website');
   const library = await scanProjectRoot(await fixture(files), 'Library');
@@ -247,7 +247,7 @@ test('applies category rules only to the selected category', async () => {
   assert.ok(!titles(library).includes('Inline event handler'));
 });
 
-test('caps output at 1000 findings and reports truncation', async () => {
+test('Specula XV · caps findings at 1000 & marks truncated', async () => {
   const root = await fixture({ 'wall.js': "eval(x);\n".repeat(1200) });
   const result = await scanProjectRoot(root, 'Software');
   assert.equal(result.findings.length, 1000);
@@ -255,14 +255,14 @@ test('caps output at 1000 findings and reports truncation', async () => {
   assert.ok(result.score >= 1, 'score never collapses to zero');
 });
 
-test('reports each rule once per line even when the catalog repeats it', async () => {
+test('Specula XVI · dedupes repeated rule on same line', async () => {
   const root = await fixture({ 'log.js': "'use strict';\nconsole.log('one value');\n" });
   const result = await scanProjectRoot(root, 'Software');
   const consoleFindings = result.findings.filter((f) => f.title === 'Console logging');
   assert.equal(consoleFindings.length, 1);
 });
 
-test('scores critical findings heavier than informational ones', async () => {
+test('Specula XVII · weights critical heavier than info', async () => {
   const clean = await scanProjectRoot(await fixture({ 'a.js': "'use strict';\n" }), 'Software');
   const info = await scanProjectRoot(await fixture({ 'a.js': "'use strict';\nconsole.log(1);\n" }), 'Software');
   const critical = await scanProjectRoot(
@@ -274,7 +274,7 @@ test('scores critical findings heavier than informational ones', async () => {
   assert.ok(critical.score < info.score);
 });
 
-test('counts every rule against every scanned file', async () => {
+test('Specula XVIII · counts rule checks across scanned files', async () => {
   const root = await fixture({ 'a.ts': 'export const a = 1;\n', 'b.ts': 'export const b = 2;\n' });
   const result = await scanProjectRoot(root, 'Library');
   assert.equal(result.filesScanned, 2);
@@ -282,7 +282,7 @@ test('counts every rule against every scanned file', async () => {
   assert.equal(result.rulesEvaluated, distinctPerFile * 2);
 });
 
-test('skips files larger than the size guard', async () => {
+test('Specula XIX · skips files over size guard', async () => {
   const big = 'const pad = 1;\n'.repeat(80000) + 'eval(x);\n';
   const root = await fixture({ 'huge.js': "'use strict';\n" + big });
   const result = await scanProjectRoot(root, 'Software');
@@ -291,7 +291,7 @@ test('skips files larger than the size guard', async () => {
 
 // These assertions pin the scanner's real limits. If a future rule catches these,
 // the test fails on purpose so the limitation list in README.md gets updated.
-test('known gaps stay documented', async () => {
+test('Specula XX · documents known scope limits', async () => {
   const root = await fixture({
     'obfuscated.js': "'use strict';\nglobalThis['ev' + 'al'](payload);\n",
     'split-sql.py': 'query = "SELECT * FROM users WHERE id=%s" % user_id\n',
@@ -301,7 +301,7 @@ test('known gaps stay documented', async () => {
   assert.ok(!titles(result).includes('SQL string concatenation'), 'generic variable-built SQL without an execute call is not detected yet');
 });
 
-test('detects SQL built with template interpolation', async () => {
+test('Specula XXI · catches template-interpolated SQL', async () => {
   const root = await fixture({
     'db.ts': 'const rows = db.query(`SELECT * FROM users WHERE id=${userId}`);\n',
   });
@@ -309,7 +309,7 @@ test('detects SQL built with template interpolation', async () => {
   assert.ok(titles(result).includes('SQL string concatenation'));
 });
 
-test('lists supported Node test files for individual runs without executing them', async () => {
+test('Specula XXII · discovers Node test files safely', async () => {
   const root = await fixture({
     'package.json': JSON.stringify({ scripts: { test: 'node --test tests/*.test.cjs' } }),
     'tests/one.test.cjs': 'test("one", () => {});\n',
@@ -324,7 +324,7 @@ test('lists supported Node test files for individual runs without executing them
   assert.equal(result.testCommand, 'npm test');
 });
 
-test('lists pytest files individually when the project declares pytest configuration', async () => {
+test('Specula XXIII · discovers pytest files', async () => {
   const root = await fixture({
     'pyproject.toml': '[tool.pytest.ini_options]\n',
     'tests/test_api.py': 'def test_api(): pass\n',
@@ -339,7 +339,7 @@ test('lists pytest files individually when the project declares pytest configura
   assert.equal(result.testCommand, 'python -m pytest');
 });
 
-test('lists Go test functions and Cargo integration files as individual targets', async () => {
+test('Specula XXIV · discovers Go & Cargo test targets', async () => {
   const root = await fixture({
     'go.mod': 'module example.test/project\n',
     'pkg/api_test.go': 'package pkg\nfunc TestOne(t *testing.T) {}\nfunc TestTwo(t *testing.T) {}\n',
@@ -356,7 +356,7 @@ test('lists Go test functions and Cargo integration files as individual targets'
   assert.equal(cargoTarget?.command, 'cargo test --test "http_api"');
 });
 
-test('tracks destructured request inputs and clears taint after sanitization', async () => {
+test('Specula XXV · tracks destructured taint & sanitizer reset', async () => {
   const root = await fixture({
     'taint.js': [
       "'use strict';",
@@ -375,7 +375,7 @@ test('tracks destructured request inputs and clears taint after sanitization', a
   assert.equal(htmlFindings[1].confidence, 'medium');
 });
 
-test('exports valid SARIF 2.1.0 and Markdown reports', async () => {
+test('Specula XXVI · exports valid SARIF 2.1.0 & Markdown', async () => {
   const root = await fixture({ 'app.js': "'use strict';\neval(userInput);\n" });
   const scan = await scanProjectRoot(root, 'Software');
   const sarif = toSarifReport(scan, { name: 'demo', root, kind: 'Software' });
@@ -387,7 +387,7 @@ test('exports valid SARIF 2.1.0 and Markdown reports', async () => {
   assert.match(markdown, /Dynamic code evaluation/);
 });
 
-test('detects deep JS logic, concurrency, prototype pollution, and web structural bugs', async () => {
+test('Specula XXVII · catches JS logic, race & proto pollution', async () => {
   const root = await fixture({
     'logic.js': [
       "'use strict';",
@@ -424,7 +424,7 @@ test('detects deep JS logic, concurrency, prototype pollution, and web structura
   }
 });
 
-test('skips safe numeric innerHTML accumulators and catches NaN/typeof/await/ReDoS bugs', async () => {
+test('Specula XXVIII · skips numeric innerHTML & catches NaN/ReDoS', async () => {
   const root = await fixture({
     'editor.js': [
       "'use strict';",
@@ -446,7 +446,7 @@ test('skips safe numeric innerHTML accumulators and catches NaN/typeof/await/ReD
   }
 });
 
-test('detects switch fallthrough, duplicate case, return in finally, and async Promise executor', async () => {
+test('Specula XXIX · catches switch fallthrough & finally return', async () => {
   const root = await fixture({
     'advanced.js': [
       "'use strict';",
@@ -468,7 +468,7 @@ test('detects switch fallthrough, duplicate case, return in finally, and async P
   }
 });
 
-test('detects unbounded recursion, empty promise catch, and sparse array holes', async () => {
+test('Specula XXX · catches infinite recursion & empty catch', async () => {
   const root = await fixture({
     'extra.js': [
       "'use strict';",
@@ -484,7 +484,7 @@ test('detects unbounded recursion, empty promise catch, and sparse array holes',
   }
 });
 
-test('detects negated in/instanceof precedence, unawaited condition, throw literal, and /g regex in loop', async () => {
+test('Specula XXXI · catches !in precedence & /g loop regex', async () => {
   const root = await fixture({
     'precedence.js': [
       "'use strict';",
@@ -504,7 +504,7 @@ test('detects negated in/instanceof precedence, unawaited condition, throw liter
   }
 });
 
-test('detects ignored return values of immutable string and array methods', async () => {
+test('Specula XXXII · catches ignored immutable method return', async () => {
   const root = await fixture({
     'immutable.js': [
       "'use strict';",
@@ -520,7 +520,7 @@ test('detects ignored return values of immutable string and array methods', asyn
   assert.equal(ignored.length, 2);
 });
 
-test('detects missing return in array callbacks and duplicate else-if branches', async () => {
+test('Specula XXXIII · catches missing map return & duplicate else-if', async () => {
   const root = await fixture({
     'callbacks.js': [
       "'use strict';",
@@ -538,7 +538,7 @@ test('detects missing return in array callbacks and duplicate else-if branches',
   assert.ok(ruleIds.has('js-duplicate-else-if'));
 });
 
-test('allows Android MAIN/LAUNCHER exported activity while flagging non-launcher exported components', async () => {
+test('Specula XXXIV · allows Android launcher & flags exported activity', async () => {
   const root = await fixture({
     'AndroidManifest.xml': [
       '<manifest>',
@@ -560,7 +560,7 @@ test('allows Android MAIN/LAUNCHER exported activity while flagging non-launcher
   assert.equal(exported[0].line, 9);
 });
 
-test('detects comma operator, missing new, template in quotes, loop direction, duplicate import, and reduce spread', async () => {
+test('Specula XXXV · catches comma op, reverse loop & reduce spread', async () => {
   const root = await fixture({
     'enormous.mjs': [
       'import a from "./a.js";',
@@ -588,7 +588,7 @@ test('detects comma operator, missing new, template in quotes, loop direction, d
   }
 });
 
-test('scans the DeepCheck repo itself without crashing', async () => {
+test('Specula XXXVI · self-scans OSIEN Probe repo cleanly', async () => {
   const root = path.resolve(__dirname, '..');
   const result = await scanProjectRoot(root, 'Software');
   assert.ok(result.filesScanned > 10, `expected a real repo scan, got ${result.filesScanned} files`);

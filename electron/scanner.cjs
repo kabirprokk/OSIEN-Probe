@@ -7,6 +7,9 @@
 
 const path = require('node:path');
 const fs = require('node:fs/promises');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
+const execFileAsync = promisify(execFile);
 const { analyzeJavaScriptAst } = require('./js-analyzer.cjs');
 const { analyzeCrossFileProject } = require('./cross-file-analyzer.cjs');
 const { analyzeTypeAndCfgProject } = require('./type-cfg-analyzer.cjs');
@@ -775,37 +778,90 @@ function scanFileContent(raw, rel, extName, lang, catalog, applicableByLang) {
   return { findings, rulesEvaluated: applicable.length };
 }
 
+async function getGitChangedFiles(scanRoot) {
+  try {
+    const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1' };
+    const { stdout } = await execFileAsync('git', ['status', '--porcelain', '-uall'], { cwd: scanRoot, env, timeout: 8000 });
+    const files = new Set();
+    for (const rawLine of stdout.split(/\r?\n/)) {
+      if (!rawLine || rawLine.length < 4) continue;
+      const status = rawLine.slice(0, 2);
+      if (status.includes('D')) continue;
+      let rel = rawLine.slice(3).trim();
+      if (rel.includes(' -> ')) rel = rel.split(' -> ').pop().trim();
+      rel = rel.replace(/^"|"$/g, '');
+      if (rel) files.add(rel.replace(/\\/g, '/'));
+    }
+    return [...files];
+  } catch (err) {
+    void err;
+    return [];
+  }
+}
+
 async function scanProjectRoot(root, kind, options = {}) {
   if (!kinds.includes(kind)) throw new Error(`Unknown category "${kind}"`);
   const scanRoot = path.resolve(root);
   const catalog = rulesForKind(kind);
   const ignorePatterns = await readIgnorePatterns(scanRoot);
   const candidates = [];
-  const queue = [scanRoot];
   const startedAt = Date.now();
 
-  while (queue.length && candidates.length < MAX_FILES) {
-    const dir = queue.pop();
-    let entries;
-    try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { continue; }
-    entries.sort((a, b) => a.name.localeCompare(b.name));
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      const rel = path.relative(scanRoot, full);
-      const ignorePath = rel.replace(/\\/g, '/');
-      if (entry.isDirectory()) {
-        const name = entry.name.toLowerCase();
-        if (ignoredDirs.has(name) || ignorePatterns.some((rx) => rx.test(ignorePath))) continue;
-        queue.push(full);
-        continue;
-      }
-      if (!entry.isFile() || ignoredFiles.has(entry.name.toLowerCase()) || /\.(?:gen|generated|pb|g)\.[cm]?[jt]sx?$/i.test(entry.name)) continue;
-      if (/\.(?:min|bundle)\.(?:js|css|mjs|cjs)$/i.test(entry.name)) continue;
-      if (ignorePatterns.some((rx) => rx.test(ignorePath))) continue;
-      const extName = path.extname(entry.name).toLowerCase();
-      if (!sourceExt.has(extName) && !isExtensionlessSource(entry.name)) continue;
-      candidates.push({ full, rel, extName });
+  let scopedSet = null;
+  let scanScope = 'full';
+  if (Array.isArray(options.onlyFiles) && options.onlyFiles.length > 0) {
+    scopedSet = new Set(options.onlyFiles.map((f) => f.replace(/\\/g, '/').replace(/^\.\//, '')));
+    scanScope = 'targeted';
+  } else if (options.changedOnly) {
+    const changed = await getGitChangedFiles(scanRoot);
+    scopedSet = new Set(changed);
+    scanScope = 'git-diff';
+  }
+
+  if (scopedSet) {
+    for (const relNorm of scopedSet) {
       if (candidates.length >= MAX_FILES) break;
+      const full = path.resolve(scanRoot, relNorm);
+      const rel = path.relative(scanRoot, full);
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
+      const base = path.basename(full);
+      if (ignoredFiles.has(base.toLowerCase()) || /\.(?:gen|generated|pb|g)\.[cm]?[jt]sx?$/i.test(base)) continue;
+      if (/\.(?:min|bundle)\.(?:js|css|mjs|cjs)$/i.test(base)) continue;
+      if (ignorePatterns.some((rx) => rx.test(relNorm))) continue;
+      const extName = path.extname(base).toLowerCase();
+      if (!sourceExt.has(extName) && !isExtensionlessSource(base)) continue;
+      try {
+        const st = await fs.stat(full);
+        if (st.isFile()) candidates.push({ full, rel, extName });
+      } catch (err) {
+        void err;
+      }
+    }
+  } else {
+    const queue = [scanRoot];
+    while (queue.length && candidates.length < MAX_FILES) {
+      const dir = queue.pop();
+      let entries;
+      try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { continue; }
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        const rel = path.relative(scanRoot, full);
+        const ignorePath = rel.replace(/\\/g, '/');
+        if (entry.isDirectory()) {
+          const name = entry.name.toLowerCase();
+          if (ignoredDirs.has(name) || ignorePatterns.some((rx) => rx.test(ignorePath))) continue;
+          queue.push(full);
+          continue;
+        }
+        if (!entry.isFile() || ignoredFiles.has(entry.name.toLowerCase()) || /\.(?:gen|generated|pb|g)\.[cm]?[jt]sx?$/i.test(entry.name)) continue;
+        if (/\.(?:min|bundle)\.(?:js|css|mjs|cjs)$/i.test(entry.name)) continue;
+        if (ignorePatterns.some((rx) => rx.test(ignorePath))) continue;
+        const extName = path.extname(entry.name).toLowerCase();
+        if (!sourceExt.has(extName) && !isExtensionlessSource(entry.name)) continue;
+        candidates.push({ full, rel, extName });
+        if (candidates.length >= MAX_FILES) break;
+      }
     }
   }
 
@@ -924,6 +980,7 @@ async function scanProjectRoot(root, kind, options = {}) {
     id: `scan-${Date.now()}`,
     projectId: null,
     completedAt: new Date().toISOString(),
+    scanScope,
     durationMs: Date.now() - startedAt,
     filesScanned,
     rulesEvaluated,
@@ -1044,6 +1101,69 @@ function toMarkdownReport(scan, project = {}) {
   return lines.join('\n');
 }
 
+function escapeHtmlText(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function toHtmlReport(scan, project = {}) {
+  const findings = scan?.findings || [];
+  const sev = scan?.severityCounts || { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+  const rows = findings.map((f) => `
+    <tr>
+      <td><span class="sev sev-${escapeHtmlText(f.severity)}">${escapeHtmlText(String(f.severity || '').toUpperCase())}</span></td>
+      <td><strong>${escapeHtmlText(f.title)}</strong><br/><small>${escapeHtmlText(f.ruleId || '')} ${f.cwe ? `· ${escapeHtmlText(f.cwe)}` : ''}</small></td>
+      <td><code>${escapeHtmlText(f.file)}:${escapeHtmlText(f.line)}</code></td>
+      <td>${escapeHtmlText(f.hint || f.reason || '')}</td>
+    </tr>`).join('\n');
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>OSIEN Probe Executive Report — ${escapeHtmlText(project.name || 'Workspace')}</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0c0d10;color:#e5e7eb;margin:0;padding:32px;line-height:1.5}
+    .wrap{max-width:1040px;margin:0 auto}
+    h1{margin:0 0 6px;font-size:24px}
+    .meta{color:#9ca3af;font-size:13px;margin-bottom:20px}
+    .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:24px}
+    .card{background:#151821;border:1px solid #262b38;border-radius:10px;padding:14px}
+    .card span{display:block;color:#9ca3af;font-size:12px}
+    .card b{font-size:22px}
+    table{width:100%;border-collapse:collapse;background:#151821;border-radius:10px;overflow:hidden}
+    th,td{padding:10px 12px;border-bottom:1px solid #262b38;text-align:left;vertical-align:top;font-size:13px}
+    th{background:#1b202c;color:#cbd5e1}
+    code{background:#0b0d12;padding:2px 6px;border-radius:4px;font-size:12px}
+    .sev{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700}
+    .sev-critical{background:#7f1d1d;color:#fecaca}
+    .sev-high{background:#7c2d12;color:#fed7aa}
+    .sev-medium{background:#713f12;color:#fef08a}
+    .sev-low{background:#1e3a8a;color:#bfdbfe}
+    .sev-info{background:#1f2937;color:#d1d5db}
+    @media print{body{background:#fff;color:#111}.card,table{background:#fff;border-color:#ddd}th{background:#f3f4f6;color:#111}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>OSIEN Probe Executive Security Report</h1>
+    <div class="meta">Project: <strong>${escapeHtmlText(project.name || 'Workspace')}</strong> · Category: ${escapeHtmlText(project.kind || 'Software')} · Generated: ${escapeHtmlText(scan?.completedAt || new Date().toISOString())} · Print to PDF via Ctrl+P</div>
+    <div class="cards">
+      <div class="card"><span>Security Score</span><b>${escapeHtmlText(scan?.score ?? 100)}/100</b></div>
+      <div class="card"><span>Files Scanned</span><b>${escapeHtmlText(scan?.filesScanned ?? 0)}</b></div>
+      <div class="card"><span>Critical / High</span><b>${escapeHtmlText(sev.critical || 0)} / ${escapeHtmlText(sev.high || 0)}</b></div>
+      <div class="card"><span>Medium / Low</span><b>${escapeHtmlText(sev.medium || 0)} / ${escapeHtmlText(sev.low || 0)}</b></div>
+      <div class="card"><span>Rule Checks</span><b>${escapeHtmlText((scan?.rulesEvaluated || 0).toLocaleString())}</b></div>
+    </div>
+    ${findings.length === 0 ? '<p><strong>0 findings reported.</strong> Clean scan.</p>' : `<table><thead><tr><th>Severity</th><th>Finding</th><th>Location</th><th>Remediation</th></tr></thead><tbody>${rows}</tbody></table>`}
+  </div>
+</body>
+</html>`;
+}
+
 const STYLE_HINT_RULES = new Set([
   'css-important', 'css-transition-all', 'css-fixed-height', 'css-user-select-none',
   'js-console-log', 'js-todo', 'js-commented-code', 'js-loose-equality', 'js-missing-strict',
@@ -1061,6 +1181,7 @@ const STYLE_HINT_RULES = new Set([
 
 module.exports = {
   scanProjectRoot,
+  getGitChangedFiles,
   scanFileContent,
   dedupeByCweLocation,
   discoverTestPlan,
@@ -1074,6 +1195,7 @@ module.exports = {
   globToRegExp,
   toSarifReport,
   toMarkdownReport,
+  toHtmlReport,
   kinds,
   STYLE_HINT_RULES,
   shared,

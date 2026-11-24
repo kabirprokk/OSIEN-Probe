@@ -8,7 +8,7 @@ const fs = require('node:fs/promises');
 const { scanProjectRoot } = require('../electron/scanner.cjs');
 const { generateFileBatchFixes } = require('../electron/ai-review.cjs');
 
-test('cross-file analyzer detects interprocedural taint, unawaited async, missing route auth, async race, TOCTOU, and API contract mismatch', async () => {
+test('Nexus · cross-file taint, race, TOCTOU & route auth', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'osien-cross-'));
   try {
     await fs.writeFile(path.join(dir, 'db.js'), [
@@ -69,7 +69,7 @@ test('cross-file analyzer detects interprocedural taint, unawaited async, missin
   }
 });
 
-test('generateFileBatchFixes validates and returns multiple patches in one call', async () => {
+test('Cohortes · batch multi-patch fix generator', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'osien-batch-'));
   try {
     await fs.writeFile(path.join(dir, 'app.js'), 'const a = eval(x);\nconst b = new Function(y);\n', 'utf8');
@@ -104,7 +104,7 @@ test('generateFileBatchFixes validates and returns multiple patches in one call'
   }
 });
 
-test('multi-hop alias taint, IDOR, CFG null-deref, React effect leak, resource leak, polyglot bugs, and bugsOnly mode', async () => {
+test('Odysseia · alias taint, IDOR, CFG & bugsOnly mode', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'osien-nextlevel-'));
   try {
     await fs.mkdir(path.join(dir, 'src', 'db'), { recursive: true });

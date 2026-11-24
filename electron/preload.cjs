@@ -10,12 +10,20 @@ contextBridge.exposeInMainWorld('deepcheck', {
   openProject: (id) => ipcRenderer.invoke('open-project', id),
   openDataFolder: () => ipcRenderer.invoke('open-data-folder'),
   scanProject: (id) => ipcRenderer.invoke('scan-project', id),
+  scanProjectChanged: (id) => ipcRenderer.invoke('scan-project-changed', id),
+  toggleWatchProject: (id) => ipcRenderer.invoke('toggle-watch-project', id),
+  onWatchScanUpdate: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('watch-scan-update', listener);
+    return () => ipcRenderer.removeListener('watch-scan-update', listener);
+  },
   generateWebRemediation: (id) => ipcRenderer.invoke('generate-web-remediation', id),
   verifyFinding: (payload) => ipcRenderer.invoke('verify-finding', payload),
   getFindingContext: (payload) => ipcRenderer.invoke('get-finding-context', payload),
   checkAiStatus: () => ipcRenderer.invoke('check-ai-status'),
   getAiConfig: () => ipcRenderer.invoke('get-ai-config'),
   saveAiConfig: (payload) => ipcRenderer.invoke('save-ai-config', payload),
+  completeOnboardingSetup: (payload) => ipcRenderer.invoke('complete-onboarding-setup', payload),
   connectCodex: () => ipcRenderer.invoke('connect-codex'),
   disconnectCodex: () => ipcRenderer.invoke('disconnect-codex'),
   connectProvider: (provider) => ipcRenderer.invoke('connect-provider', provider),
@@ -36,6 +44,23 @@ contextBridge.exposeInMainWorld('deepcheck', {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('extreme-test-event', listener);
     return () => ipcRenderer.removeListener('extreme-test-event', listener);
+  },
+  startNpcSwarm: (payload) => ipcRenderer.invoke('start-npc-swarm', payload),
+  stopNpcSwarm: (projectId) => ipcRenderer.invoke('stop-npc-swarm', projectId),
+  onNpcSwarmEvent: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('npc-swarm-event', listener);
+    return () => ipcRenderer.removeListener('npc-swarm-event', listener);
+  },
+  getVisionStatus: () => ipcRenderer.invoke('vision-status'),
+  installVisionModel: () => ipcRenderer.invoke('vision-install'),
+  analyzeImageVision: (imagePath) => ipcRenderer.invoke('vision-analyze', imagePath),
+  checkAppUpdates: () => ipcRenderer.invoke('check-app-updates'),
+  downloadAppUpdate: (info) => ipcRenderer.invoke('download-app-update', info),
+  onUpdateProgress: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('update-download-progress', listener);
+    return () => ipcRenderer.removeListener('update-download-progress', listener);
   },
   exportReport: (payload) => ipcRenderer.invoke('export-report', payload),
   runProjectTests: (id) => ipcRenderer.invoke('run-project-tests', id),

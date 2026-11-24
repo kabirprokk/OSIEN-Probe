@@ -6,12 +6,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs/promises');
-const os = require('node:os');
 const path = require('node:path');
 
 const { shared, categoryRules, SEVERITIES } = require('../electron/rules.cjs');
-const { scanProjectRoot, rulesForKind, kinds } = require('../electron/scanner.cjs');
+const { scanFileContent, rulesForKind, kinds } = require('../electron/scanner.cjs');
 
 const FILE_FOR_LANG = {
   js: 'sample.js',
@@ -34,13 +32,15 @@ for (const kind of kinds) {
   }
 }
 
-async function scanSample(sample, lang, kind) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'deepcheck-rule-'));
-  await fs.writeFile(path.join(root, FILE_FOR_LANG[lang]), `${sample}\n`, 'utf8');
-  return scanProjectRoot(root, kind);
+async function scanSample(sample, lang, _kind, rule) {
+  const fileName = FILE_FOR_LANG[lang];
+  const extName = path.extname(fileName);
+  const effectiveLang = lang === 'any' ? 'js' : lang;
+  const catalog = rule ? [rule] : rulesForKind(_kind);
+  return scanFileContent(`${sample}\n`, fileName, extName, effectiveLang, catalog);
 }
 
-test('catalog: every rule carries full metadata and samples', () => {
+test('Codex · rule catalog metadata & samples', () => {
   const ids = new Set();
   for (const rule of allRules) {
     assert.equal(typeof rule.id, 'string', 'rule has an id');
@@ -60,7 +60,7 @@ test('catalog: every rule carries full metadata and samples', () => {
   assert.ok(allRules.length >= 130, `expected a large catalog, got ${allRules.length}`);
 });
 
-test('catalog: each category evaluates a large rule set', () => {
+test('Phalanx · every category runs a full rule pack', () => {
   for (const kind of kinds) {
     const count = rulesForKind(kind).length;
     assert.ok(count >= 120, `${kind} evaluates ${count} rules`);
@@ -70,16 +70,16 @@ test('catalog: each category evaluates a large rule set', () => {
 // One generated test per rule so a failure names the exact rule.
 for (const rule of allRules) {
   const kind = rule.kinds ? rule.kinds[0] : (categoryOf.get(rule.id) || 'Software');
-  test(`rule ${rule.id}: fires on its positive sample`, async () => {
-    const result = await scanSample(rule.bad, rule.lang, kind);
+  test(`Telum [${rule.id}] · catches bad sample`, async () => {
+    const result = await scanSample(rule.bad, rule.lang, kind, rule);
     const hit = result.findings.find((finding) => finding.ruleId === rule.id);
     assert.ok(hit, `${rule.id} did not flag: ${JSON.stringify(rule.bad)}`);
     assert.equal(hit.severity, rule.severity);
     assert.ok(hit.line >= 1);
   });
 
-  test(`rule ${rule.id}: silent on its negative sample`, async () => {
-    const result = await scanSample(rule.good, rule.lang, kind);
+  test(`Aegis [${rule.id}] · passes clean sample`, async () => {
+    const result = await scanSample(rule.good, rule.lang, kind, rule);
     const hit = result.findings.find((finding) => finding.ruleId === rule.id);
     assert.ok(!hit, `${rule.id} false positive on: ${JSON.stringify(rule.good)}`);
   });
