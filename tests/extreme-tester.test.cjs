@@ -62,7 +62,7 @@ test('Portus · static sandbox server on 127.0.0.1', async () => {
 
 test('Hasta · builds executable extreme probe script', () => {
   const src = buildExtremeProbeScript(3);
-  assert.match(src, /__osien_probe_cursor__/);
+  assert.match(src, /lastCursor/);
   assert.match(src, /data-osien-xss-probe/);
   assert.doesNotThrow(() => new Function(src));
 });

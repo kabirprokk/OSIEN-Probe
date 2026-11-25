@@ -335,14 +335,7 @@ function startNpmSandboxServer(root, scriptName, onLog) {
 function buildExtremeProbeScript(stepIndex) {
   return `(() => {
     const STEP = ${Number(stepIndex)};
-    const PROBE_ID = '__osien_probe_cursor__';
-    let cursor = document.getElementById(PROBE_ID);
-    if (!cursor) {
-      cursor = document.createElement('div');
-      cursor.id = PROBE_ID;
-      cursor.style.cssText = 'position:fixed;z-index:2147483647;width:20px;height:20px;border-radius:50%;border:2px solid #a8c77e;background:rgba(140,207,94,0.28);box-shadow:0 0 14px rgba(168,199,126,0.85);pointer-events:none;transition:left .14s ease,top .14s ease,transform .1s ease;left:16px;top:16px;';
-      document.documentElement.appendChild(cursor);
-    }
+    let lastCursor = { x: 0.5, y: 0.35, clicked: false };
 
     const mem = window.__osienBrain || (window.__osienBrain = {
       clicked: new Map(),
@@ -378,18 +371,19 @@ function buildExtremeProbeScript(stepIndex) {
     }
 
     const moveCursor = (el, pulse = false) => {
-      const r = el.getBoundingClientRect();
-      cursor.style.left = Math.max(4, r.left + r.width / 2 - 10) + 'px';
-      cursor.style.top = Math.max(4, r.top + r.height / 2 - 10) + 'px';
-      if (pulse) {
-        cursor.style.transform = 'scale(1.4)';
-        setTimeout(() => { cursor.style.transform = 'scale(1)'; }, 110);
-      }
       el.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+      const r = el.getBoundingClientRect();
+      const vw = Math.max(1, window.innerWidth);
+      const vh = Math.max(1, window.innerHeight);
+      lastCursor = {
+        x: Math.min(0.98, Math.max(0.02, (r.left + r.width / 2) / vw)),
+        y: Math.min(0.98, Math.max(0.02, (r.top + r.height / 2) / vh)),
+        clicked: Boolean(pulse),
+      };
     };
 
     const isVisible = (el) => {
-      if (!el || el.id === PROBE_ID) return false;
+      if (!el) return false;
       const r = el.getBoundingClientRect();
       const s = getComputedStyle(el);
       return r.width > 4 && r.height > 4 && s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0' && !el.disabled;
@@ -615,6 +609,7 @@ function buildExtremeProbeScript(stepIndex) {
       action,
       targetLabel,
       detailNote,
+      cursor: lastCursor,
       inputsCount: inputs.length,
       clickablesCount: clickables.length,
       findings,
@@ -760,7 +755,7 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
 
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     if (typeof win.webContents.setFrameRate === 'function') {
-      win.webContents.setFrameRate(15);
+      win.webContents.setFrameRate(24);
     }
     let latestPaintedFrame = null;
     win.webContents.on('paint', (_event, _dirty, image) => {
@@ -844,6 +839,7 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
     let clicks = 0;
     let inputsFuzzed = 0;
     let prevVisionEmbedding = null;
+    let consecutiveBlankFrames = 0;
     const routes = new Set([server.url]);
     const mobileSwitchStep = Math.max(4, Math.floor(profile.maxSteps * 0.65));
     const desktopRestoreStep = Math.min(profile.maxSteps - 2, mobileSwitchStep + 6);
@@ -877,6 +873,7 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
             maxSteps: profile.maxSteps,
             url: res.url,
             action: res.action,
+            cursor: res.cursor || null,
             targetLabel: res.detailNote ? `${res.targetLabel} (${res.detailNote})` : res.targetLabel,
             stats: { pages: routes.size, clicks, inputsFuzzed, findings: emittedFindings.size },
           });
@@ -890,9 +887,24 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
           const domMetrics = await win.webContents.executeJavaScript(`(() => {
             const imgs = [...document.querySelectorAll('img')];
             const broken = imgs.filter(img => img.complete && img.naturalWidth === 0 && img.getAttribute('src'));
+            const hasFixedOrStickyAncestor = (el) => {
+              let cur = el;
+              while (cur && cur !== document.body && cur !== document.documentElement) {
+                const pos = getComputedStyle(cur).position;
+                if (pos === 'fixed' || pos === 'sticky') return true;
+                cur = cur.parentElement;
+              }
+              return false;
+            };
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
             const controls = [...document.querySelectorAll('button, input, select, a[href]')].filter(el => {
               const r = el.getBoundingClientRect();
-              return r.width > 4 && r.height > 4 && getComputedStyle(el).visibility !== 'hidden';
+              const s = getComputedStyle(el);
+              if (r.width <= 4 || r.height <= 4 || s.visibility === 'hidden' || s.display === 'none' || s.opacity === '0' || s.pointerEvents === 'none') return false;
+              if (r.bottom <= 0 || r.top >= vh || r.right <= 0 || r.left >= vw) return false;
+              if (hasFixedOrStickyAncestor(el)) return false;
+              return true;
             });
             let overlaps = 0;
             let overlapSummary = '';
@@ -903,19 +915,21 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
                 const b = controls[j].getBoundingClientRect();
                 const ix = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
                 const iy = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
-                if (ix * iy > 140) {
+                const minArea = Math.min(a.width * a.height, b.width * b.height);
+                if (ix * iy > Math.max(220, minArea * 0.25)) {
                   overlaps++;
-                  if (!overlapSummary) overlapSummary = (controls[i].innerText || controls[i].tagName) + ' overlaps ' + (controls[j].innerText || controls[j].tagName);
+                  if (!overlapSummary) overlapSummary = (controls[i].innerText || controls[i].tagName).trim().slice(0, 40) + ' overlaps ' + (controls[j].innerText || controls[j].tagName).trim().slice(0, 40);
                 }
               }
             }
             return {
+              domTextLength: (document.body?.innerText || '').trim().length,
               brokenImages: broken.length,
               brokenImageSrc: broken[0]?.getAttribute('src') || '',
               overlappingControls: overlaps,
               overlapSummary: overlapSummary.slice(0, 120),
             };
-          })()`, true).catch(() => ({}));
+          })()`, true).catch(() => ({ domTextLength: 100 }));
 
           const frame = await grabFrame();
           if (frame) {
@@ -930,7 +944,20 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
               domMetrics,
             });
             prevVisionEmbedding = visionReport.embedding;
-            for (const vf of visionReport.findings) pushFinding(vf);
+            const hasBlank = visionReport.findings.some((vf) => vf.ruleId === 'vision-blank-screen-crash');
+            if (hasBlank) consecutiveBlankFrames += 1;
+            else consecutiveBlankFrames = 0;
+
+            for (const vf of visionReport.findings) {
+              if (vf.ruleId === 'vision-blank-screen-crash') {
+                // Only flag a real crash when 2 consecutive frames are blank AND the DOM has no rendered text
+                if (consecutiveBlankFrames >= 2 && (domMetrics.domTextLength ?? 0) < 20) {
+                  pushFinding(vf);
+                }
+              } else {
+                pushFinding(vf);
+              }
+            }
             if (step % 4 === 0) {
               emit('log', { level: 'info', text: visionReport.caption });
             }

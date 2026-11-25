@@ -46,6 +46,7 @@ type ExtremeState = {
   action: string
   targetLabel: string
   frameUrl: string
+  cursor?: { x: number; y: number; clicked: boolean; seq: number }
   vision?: ExtremeVisionState
   stats: ExtremeStats
   logs: { level: string; text: string }[]
@@ -657,6 +658,15 @@ function App() {
           const stats = (ev.stats as ExtremeStats) || prev.stats
           const label = typeof ev.targetLabel === 'string' && ev.targetLabel ? ` · ${ev.targetLabel}` : ''
           const stepLog = { level: 'step', text: `[${ev.step}/${ev.maxSteps}] ${ev.action}${label}` }
+          const rawCursor = ev.cursor as { x?: number; y?: number; clicked?: boolean } | null | undefined
+          const nextCursor = rawCursor && typeof rawCursor.x === 'number' && typeof rawCursor.y === 'number'
+            ? {
+              x: Math.min(0.98, Math.max(0.02, rawCursor.x)),
+              y: Math.min(0.98, Math.max(0.02, rawCursor.y)),
+              clicked: Boolean(rawCursor.clicked),
+              seq: (prev.cursor?.seq || 0) + 1,
+            }
+            : prev.cursor
           return {
             ...prev,
             step: Number(ev.step || prev.step),
@@ -664,6 +674,7 @@ function App() {
             url: String(ev.url || prev.url),
             action: String(ev.action || ''),
             targetLabel: String(ev.targetLabel || ''),
+            cursor: nextCursor,
             stats,
             logs: [stepLog, ...prev.logs].slice(0, 60),
           }
@@ -2442,7 +2453,36 @@ function ExtremeSandboxView({
         </div>
         <div className="extreme-screen">
           {extreme.frameUrl
-            ? <img src={extreme.frameUrl} alt="Live sandbox viewport"/>
+            ? (
+              <div className="extreme-stage">
+                <img src={extreme.frameUrl} alt="Live sandbox viewport"/>
+                {extreme.running && extreme.cursor && (
+                  <div
+                    className="extreme-cursor"
+                    style={{
+                      left: `${extreme.cursor.x * 100}%`,
+                      top: `${extreme.cursor.y * 100}%`,
+                    }}
+                  >
+                    {extreme.cursor.clicked && (
+                      <span key={extreme.cursor.seq} className="extreme-cursor-ripple"/>
+                    )}
+                    <svg className="extreme-cursor-svg" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        d="M4 3l7.2 17.5 2.5-6.2 6.3-2.5L4 3z"
+                        fill="#a8d977"
+                        stroke="#0b0c0d"
+                        strokeWidth="1.7"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                    {extreme.action && (
+                      <span className="extreme-cursor-tag">{extreme.action.replace('human-', '').toUpperCase()}</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )
             : <div className="extreme-placeholder"><RefreshCw size={18} className="spinning"/><span>Booting isolated Chromium sandbox…</span></div>}
         </div>
         {extreme.vision && (
