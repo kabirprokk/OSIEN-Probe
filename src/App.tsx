@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, ArrowUpRight, Bug, Check, ChevronDown, CircleHelp, Code2, Download, ExternalLink, Eye, FileCode2, Folder, Gauge, GitBranch, Globe2, History, Layers3, Play, Plus, RefreshCw, Search, Shield, ShieldCheck, SlidersHorizontal, Terminal, Trash2, X } from 'lucide-react'
+import { Activity, ArrowUpRight, Bug, Check, ChevronDown, CircleHelp, Code2, Compass, Download, ExternalLink, Eye, FileCode2, Folder, Gauge, GitBranch, Globe2, History, Layers3, Play, Plus, RefreshCw, Search, Shield, ShieldCheck, SlidersHorizontal, Terminal, Trash2, X } from 'lucide-react'
 import './App.css'
 import './Working.css'
 import './UIOverrides.css'
 import { BalloonGame } from './BalloonGame'
+import { DiveIn } from './DiveIn'
+import { AttackGraph } from './AttackGraph'
 
 type Kind = 'Website' | 'Software' | 'API / backend' | 'Mobile app' | 'Library' | 'Data / ML' | 'Cloud / DevOps' | 'Blockchain / Web3' | 'Desktop / Electron' | 'CLI / Automation'
 type AiAssessment = { verdict: 'likely_real' | 'likely_false_positive' | 'uncertain'; confidence: number; rationale: string; evidence: string; reviewAdvice: string; model: string; reviewedAt: string }
@@ -20,7 +22,7 @@ type Project = { id: string; name: string; root: string; kind: Kind; addedAt: st
 type ContextLine = { number: number; text: string; isTarget: boolean }
 type SourceContext = { context: string; lines?: ContextLine[]; totalLines: number }
 type AiHealth = { available: boolean; modelInstalled: boolean; model: string; endpoint: string; models: string[]; message: string }
-type Route = 'Projects' | 'Test runs' | 'Findings' | 'Security' | 'Rule catalog' | 'Environments' | 'Settings'
+type Route = 'Projects' | 'Test runs' | 'Findings' | 'Security' | 'Rule catalog' | 'Environments' | 'Settings' | 'Dive in'
 type CatalogRule = { id: string; title: string; severity: string; cwe: string; lang: string; category: string; hint: string; bad: string; good: string }
 type CatalogPayload = { total: number; categories: string[]; rules: CatalogRule[] }
 type SystemProfile = { cpuModel: string; cpuCores: number; totalMemGb: number; freeMemGb: number; tier: 'high' | 'balanced' | 'light'; maxSteps: number; stepDelayMs: number }
@@ -100,6 +102,11 @@ type Bridge = {
   checkAppUpdates?(): Promise<{ available: boolean; currentVersion: string; latestVersion: string; releaseUrl?: string; releaseNotes?: string; assetName?: string; downloadUrl?: string; sizeBytes?: number; error?: string }>
   downloadAppUpdate?(info: { latestVersion: string; assetName?: string; downloadUrl?: string; sizeBytes?: number }): Promise<{ launched: boolean; destPath: string }>
   onUpdateProgress?(cb: (p: { received: number; totalBytes: number; percent: number; state: string }) => void): () => void
+  scanGitHistory?(p: { projectId: string; maxCommits?: number }): Promise<{ ok: boolean; isGitRepo: boolean; commitsScanned: number; findings: Array<{ ruleId: string; title: string; severity: string; file: string; commitHash: string; commitDate: string; author: string; redactedPreview: string; status: string; hint: string }>; message?: string }>
+  auditSupplyChain?(projectId: string): Promise<{ ok: boolean; projectName: string; rootLicense: string; totalDependencies: number; inspectedInstalled: number; findings: Array<{ ruleId: string; title: string; severity: string; file: string; detail: string }> }>
+  exportSbom?(projectId: string): Promise<{ saved: boolean; filePath?: string; components?: number }>
+  getPreCommitHookStatus?(projectId: string): Promise<{ isGitRepo: boolean; installed: boolean; hookPath?: string }>
+  togglePreCommitHook?(projectId: string): Promise<{ isGitRepo: boolean; installed: boolean }>
   exportReport?(p: { projectId?: string; format: 'sarif' | 'markdown' | 'html' | 'json' }): Promise<{ saved: boolean; filePath: string | null }>
   runProjectTests(id: string): Promise<TestResult>
   runProjectTestFile(p: { projectId: string; file: string }): Promise<TestResult>
@@ -131,6 +138,7 @@ const nav: { name: Route; Icon: typeof Layers3 }[] = [
   { name: 'Rule catalog', Icon: ShieldCheck },
   { name: 'Environments', Icon: Terminal },
   { name: 'Settings', Icon: SlidersHorizontal },
+  { name: 'Dive in', Icon: Compass },
 ]
 const ITHACA_SPINNER_VERBS = [
   'Cogitating…',
@@ -669,11 +677,6 @@ function App() {
   }, [bridge])
   const startExtremeTest = async (p: Project) => {
     setExtremeChoice(null)
-    if (!isCloudConnected) {
-      setShowSetupWizard(true)
-      setMessage('Extreme Live Sandbox Test is only unlocked when you connect and use a Cloud AI Provider (e.g. Claude, Codex, OpenCode, or Pi).')
-      return
-    }
     if (!bridge?.startExtremeTest) return
     setSelectedProject(p)
     setRoute('Test runs')
@@ -689,7 +692,7 @@ function App() {
       targetLabel: '',
       frameUrl: '',
       stats: { pages: 1, clicks: 0, inputsFuzzed: 0, findings: 0 },
-      logs: [{ level: 'info', text: `Booting isolated Chromium sandbox + OSIEN Vision-22M AI for ${p.name}…` }],
+      logs: [{ level: 'info', text: `Booting isolated Chromium sandbox + Mirage-22M Vision AI for ${p.name}…` }],
       findings: [],
     })
     try {
@@ -1208,6 +1211,8 @@ function App() {
           <RuleCatalog catalog={catalog}/>
         ) : route === 'Environments' ? (
           <Environments projects={projects} aiHealth={aiHealth} onCheckAi={refreshAll} onOpen={p => void bridge!.openProject(p.id)} onTest={runTests} busy={busy}/>
+        ) : route === 'Dive in' ? (
+          <DiveIn />
         ) : (
           <div className="settings-panel">
             <h2>AI Provider &amp; Models</h2>
@@ -1507,16 +1512,13 @@ function App() {
             setExtremeChoice(null)
             void startExtremeTest(target)
           }}
-          style={isCloudConnected ? undefined : { opacity: 0.72 }}
         >
           <div className="mode-badge mode-badge-extreme">
-            {isCloudConnected ? 'Unlocked · Cloud AI + Vision-22M' : 'Cloud Provider Required · Locked'}
+            Live Chromium + Mirage-22M Vision AI
           </div>
           <strong>Arena Odyssey (Extreme Sandbox)</strong>
           <small>
-            {isCloudConnected
-              ? 'Boots an isolated Chromium sandbox and inspects every live rendered frame with Vision-22M AI to catch blank screens, overlaps, broken images, and UI bugs.'
-              : 'Locked while using Local AI. Click to open Customization and connect a Cloud Provider (e.g. Anthropic Claude, OpenAI Codex, OpenCode, or Pi) to unlock.'}
+            Boots an isolated Chromium sandbox (auto-installing deps if needed), tests Desktop + Mobile viewports, catches runtime/console/XSS/a11y bugs, and inspects every live frame with Vision-22M AI.
           </small>
         </button>
       </div>
@@ -1996,6 +1998,74 @@ function Runs({
   onRunFile(p: Project, target: TestTarget): void
   onExport(format: 'sarif' | 'markdown' | 'html' | 'json', projectId?: string): void
 }) {
+  const bridge = window.deepcheck
+  const [graphOpen, setGraphOpen] = useState<Record<string, boolean>>({})
+  const [gitHistoryRes, setGitHistoryRes] = useState<Record<string, { commitsScanned: number; findings: Array<{ ruleId: string; title: string; severity: string; file: string; commitHash: string; commitDate: string; redactedPreview: string; status: string }>; message?: string }>>({})
+  const [supplyRes, setSupplyRes] = useState<Record<string, { totalDependencies: number; inspectedInstalled: number; rootLicense: string; findings: Array<{ ruleId: string; title: string; severity: string; file: string; detail: string }> }>>({})
+  const [hookInstalled, setHookInstalled] = useState<Record<string, boolean>>({})
+  const [toolBusy, setToolBusy] = useState<string>('')
+  const [toolNotice, setToolNotice] = useState<Record<string, string>>({})
+
+  const runGitHistory = async (p: Project) => {
+    if (!bridge?.scanGitHistory) return
+    setToolBusy(`git:${p.id}`)
+    try {
+      const res = await bridge.scanGitHistory({ projectId: p.id, maxCommits: 50 })
+      setGitHistoryRes((prev) => ({ ...prev, [p.id]: res }))
+    } catch (e) {
+      setToolNotice((prev) => ({ ...prev, [p.id]: errorText(e) }))
+    } finally {
+      setToolBusy('')
+    }
+  }
+
+  const runSupplyAudit = async (p: Project) => {
+    if (!bridge?.auditSupplyChain) return
+    setToolBusy(`sbom:${p.id}`)
+    try {
+      const res = await bridge.auditSupplyChain(p.id)
+      setSupplyRes((prev) => ({ ...prev, [p.id]: res }))
+    } catch (e) {
+      setToolNotice((prev) => ({ ...prev, [p.id]: errorText(e) }))
+    } finally {
+      setToolBusy('')
+    }
+  }
+
+  const exportSbomFile = async (p: Project) => {
+    if (!bridge?.exportSbom) return
+    setToolBusy(`sbomexp:${p.id}`)
+    try {
+      const res = await bridge.exportSbom(p.id)
+      if (res.saved && res.filePath) {
+        setToolNotice((prev) => ({ ...prev, [p.id]: `CycloneDX SBOM exported to ${res.filePath} (${res.components || 0} components)` }))
+      }
+    } catch (e) {
+      setToolNotice((prev) => ({ ...prev, [p.id]: errorText(e) }))
+    } finally {
+      setToolBusy('')
+    }
+  }
+
+  const togglePreCommit = async (p: Project) => {
+    if (!bridge?.togglePreCommitHook) return
+    setToolBusy(`hook:${p.id}`)
+    try {
+      const res = await bridge.togglePreCommitHook(p.id)
+      setHookInstalled((prev) => ({ ...prev, [p.id]: res.installed }))
+      setToolNotice((prev) => ({
+        ...prev,
+        [p.id]: res.installed
+          ? 'Pre-commit Git guard installed (.git/hooks/pre-commit). Critical bugs/secrets will be blocked before commit.'
+          : 'Pre-commit Git guard removed.',
+      }))
+    } catch (e) {
+      setToolNotice((prev) => ({ ...prev, [p.id]: errorText(e) }))
+    } finally {
+      setToolBusy('')
+    }
+  }
+
   const list = selected ? projects.filter(p => p.id === selected.id) : projects.filter(p => p.latestRun)
   return <div className="detail-panel">
     {list.map(p => <div className="run-card" key={p.id}>
@@ -2006,20 +2076,22 @@ function Runs({
             <button className="filter-button" onClick={() => onExport('sarif', p.id)} disabled={!!busy}><Download size={13}/> SARIF</button>
             <button className="filter-button" onClick={() => onExport('markdown', p.id)} disabled={!!busy}><Download size={13}/> MD</button>
             <button className="filter-button" onClick={() => onExport('html', p.id)} disabled={!!busy} title="Export printable Executive HTML / PDF Report"><Download size={13}/> HTML/PDF</button>
-          </>}
-          {p.kind === 'Website' && (
             <button
-              className="filter-button extreme-btn"
-              onClick={() => onExtreme(p)}
-              disabled={!!busy}
-              title={isCloudCodex
-                ? 'Launch Extreme Live Sandbox Test with Vision-22M AI frame inspection'
-                : 'Locked: Connect a Cloud AI Provider (Claude, Codex, OpenCode, or Pi) to unlock Extreme Live Sandbox Test'}
-              style={isCloudCodex ? undefined : { opacity: 0.65 }}
+              className={`filter-button ${graphOpen[p.id] ? 'filter-active' : ''}`}
+              onClick={() => setGraphOpen((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
+              title="Toggle Interactive Visual Attack-Graph (Source -> File -> Sink)"
             >
-              <Activity size={13}/> {isCloudCodex ? 'Arena Odyssey' : 'Arena (Cloud AI)'}
+              <GitBranch size={13}/> Attack Graph
             </button>
-          )}
+          </>}
+          <button
+            className="filter-button extreme-btn"
+            onClick={() => onExtreme(p)}
+            disabled={!!busy}
+            title="Launch Arena Odyssey: Live Chromium Sandbox + Desktop/Mobile + Mirage-22M Vision AI"
+          >
+            <Activity size={13}/> Arena Odyssey
+          </button>
           <select
             aria-label="NPC swarm user count"
             className="filter-select"
@@ -2054,6 +2126,15 @@ function Runs({
             <button className="filter-button" onClick={() => onScanChanged(p)} disabled={!!busy} title="Scan only Git-modified or untracked files">
               <GitBranch size={13}/> {busy === `diff:${p.id}` ? spinnerVerb : 'Git Diff'}
             </button>
+            <button className="filter-button" onClick={() => void runGitHistory(p)} disabled={!!toolBusy} title="Scan past Git commits for leaked API keys & secrets">
+              <History size={13}/> {toolBusy === `git:${p.id}` ? 'Scanning…' : 'Git Secrets'}
+            </button>
+            <button className="filter-button" onClick={() => void runSupplyAudit(p)} disabled={!!toolBusy} title="Audit typosquats, postinstall scripts, licenses & CycloneDX SBOM">
+              <Layers3 size={13}/> {toolBusy === `sbom:${p.id}` ? 'Auditing…' : 'SBOM & Supply'}
+            </button>
+            <button className={`filter-button ${hookInstalled[p.id] ? 'filter-active' : ''}`} onClick={() => void togglePreCommit(p)} disabled={!!toolBusy} title="1-click install/remove fast Git pre-commit guard">
+              <Shield size={13}/> {hookInstalled[p.id] ? 'Pre-Commit ✓' : 'Pre-Commit'}
+            </button>
             <button className="filter-button" onClick={() => onToggleWatch(p)} title="Auto-scan saved files in real time">
               <Eye size={13}/> {watchingIds[p.id] ? 'Watching ✓' : 'Watch'}
             </button>
@@ -2064,6 +2145,63 @@ function Runs({
           </button>
         </div>
       </div>
+      {toolNotice[p.id] && (
+        <div className="notice" style={{ margin: '10px 0' }}>{toolNotice[p.id]}</div>
+      )}
+      {p.latestRun && graphOpen[p.id] && (
+        <div style={{ margin: '12px 0' }}>
+          <AttackGraph
+            findings={p.latestRun.findings.map((f) => ({
+              ruleId: f.ruleId || 'rule',
+              title: f.title,
+              severity: f.severity,
+              cwe: f.cwe,
+              file: f.file,
+              line: f.line,
+              hint: f.hint,
+              reason: f.reason,
+            }))}
+          />
+        </div>
+      )}
+      {gitHistoryRes[p.id] && (
+        <div style={{ margin: '10px 0', padding: 12, borderRadius: 10, border: '1px solid rgba(56,189,248,0.22)', background: 'rgba(10,18,32,0.75)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <strong><History size={13} style={{ verticalAlign: 'text-bottom', marginRight: 6 }}/>Git History Secret Scan ({gitHistoryRes[p.id].commitsScanned} commits)</strong>
+            <span className="badge sev-info">{gitHistoryRes[p.id].findings.length} leak(s)</span>
+          </div>
+          {gitHistoryRes[p.id].message && <small>{gitHistoryRes[p.id].message}</small>}
+          {gitHistoryRes[p.id].findings.length === 0
+            ? <small style={{ color: '#4ade80' }}>✔ Zero secrets found in scanned Git commit history.</small>
+            : gitHistoryRes[p.id].findings.map((f, i) => (
+              <div key={`${f.commitHash}-${i}`} style={{ fontSize: 12, padding: '6px 0', borderTop: '1px solid rgba(148,163,184,0.14)' }}>
+                <span className={`severity severity-${f.severity}`} style={{ marginRight: 8 }}>{f.severity}</span>
+                <strong>{f.title}</strong> · <code>{f.file}</code> @ <code>{f.commitHash}</code> ({f.commitDate}) · <code>{f.redactedPreview}</code> [{f.status}]
+              </div>
+            ))}
+        </div>
+      )}
+      {supplyRes[p.id] && (
+        <div style={{ margin: '10px 0', padding: 12, borderRadius: 10, border: '1px solid rgba(45,212,191,0.24)', background: 'rgba(10,22,30,0.75)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, flexWrap: 'wrap', gap: 8 }}>
+            <strong>
+              <Layers3 size={13} style={{ verticalAlign: 'text-bottom', marginRight: 6 }}/>
+              Supply-Chain &amp; SBOM ({supplyRes[p.id].totalDependencies} deps · {supplyRes[p.id].inspectedInstalled} installed · License: {supplyRes[p.id].rootLicense})
+            </strong>
+            <button className="filter-button" onClick={() => void exportSbomFile(p)} disabled={!!toolBusy}>
+              <Download size={12}/> Export CycloneDX SBOM
+            </button>
+          </div>
+          {supplyRes[p.id].findings.length === 0
+            ? <small style={{ color: '#4ade80' }}>✔ No typosquats, risky install scripts, or license conflicts detected.</small>
+            : supplyRes[p.id].findings.map((f, i) => (
+              <div key={`${f.ruleId}-${i}`} style={{ fontSize: 12, padding: '6px 0', borderTop: '1px solid rgba(148,163,184,0.14)' }}>
+                <span className={`severity severity-${f.severity}`} style={{ marginRight: 8 }}>{f.severity}</span>
+                <strong>{f.title}</strong> — <span style={{ opacity: 0.8 }}>{f.detail}</span>
+              </div>
+            ))}
+        </div>
+      )}
       {p.latestRun ? <>
         <div className="run-stats">
           <span><b>{p.latestRun.filesScanned}</b> files scanned</span>
@@ -2427,6 +2565,7 @@ function pageDescription(route: Route) {
     'Rule catalog': 'Browse all static rules, CWEs, and safe vs. flagged code examples',
     Environments: 'Local AI review engine status, detected project folders, and test commands',
     Settings: 'Manage local project data and workspace exports',
+    'Dive in': 'Explore the OSIEN Ocean — click any glowing beacon to open a working OSIEN project',
   })[route]
 }
 function errorText(e: unknown) { return e instanceof Error ? e.message : String(e) }

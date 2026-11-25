@@ -840,3 +840,89 @@ select, select option, input, textarea {
   .test-file-row > span { grid-column: 1; }
   .rule-samples { grid-template-columns: 1fr; }
 }
+
+/* ── Dive in (OSIEN Ocean) ── */
+.dive-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: calc(100vh - 135px);
+  min-height: 480px;
+}
+.dive-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+.dive-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(155, 245, 239, 0.25);
+  background: rgba(13, 27, 44, 0.72);
+  color: #9bf5ef;
+  font-size: 12px;
+  font-weight: 600;
+}
+.ocean-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #030712;
+}
+.ocean-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.ocean-node {
+  cursor: pointer;
+  transition: opacity 0.18s ease;
+}
+.ocean-node:hover {
+  opacity: 0.96;
+}
+.dive-hud {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(17, 24, 34, 0.92);
+}
+.dive-hud-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.dive-kicker {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #9bf5ef;
+}
+.dive-hud-copy strong {
+  font-size: 15px;
+  color: #f1f6fa;
+}
+.dive-hud-copy p {
+  margin: 0;
+  font-size: 12px;
+  color: #a5b3c0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dive-hud-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}

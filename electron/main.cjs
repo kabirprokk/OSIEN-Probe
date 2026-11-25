@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, dialog, ipcMain, shell, Menu, session } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu, session, Notification } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
@@ -19,6 +19,19 @@ const { runNpcSwarmTest, stopNpcSwarmTest } = require('./npc-swarm-tester.cjs');
 const { getLocalVisionStatus, provisionLocalVisionModel, analyzeImageLocal, autoInstallCactusCompute } = require('./local-vision.cjs');
 const { cloneRepositoryAuto, ensureOllamaBinary } = require('./auto-installer.cjs');
 const { checkForAppUpdates, downloadAndLaunchUpdate } = require('./auto-updater.cjs');
+const { scanGitHistorySecrets } = require('./git-history-scanner.cjs');
+const { auditSupplyChain } = require('./supply-chain-auditor.cjs');
+const { getPreCommitHookStatus, installPreCommitHook, removePreCommitHook } = require('./git-hooks.cjs');
+
+function showOsToast(title, body) {
+  try {
+    if (Notification && typeof Notification.isSupported === 'function' && Notification.isSupported()) {
+      new Notification({ title: String(title || 'OSIEN Probe'), body: String(body || '') }).show();
+    }
+  } catch {
+    // Ignore OS notification errors on headless/restricted environments.
+  }
+}
 const visionModelDir = () => path.join(app.getPath('userData'), 'models', 'osien-vision-22m');
 const isInside = (root, target) => { const rel = path.relative(root, target); return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel)); };
 const statePath = () => path.join(app.getPath('userData'), 'deepcheck-projects.json');
@@ -601,20 +614,22 @@ ipc('fix-all-findings', async (_event, payload) => {
 });
 ipc('get-system-profile', async () => getSystemProfile());
 ipc('start-extreme-test', async (_event, projectId) => {
-  const aiCfg = await readAiConfig();
-  const pub = await publicAiConfig(aiCfg);
-  const isCloudReady = isCloudProvider(aiCfg.provider) && Boolean(pub.connectedByProvider?.[aiCfg.provider] || pub.hasApiKey);
-  if (!isCloudReady) {
-    throw new Error('Extreme Live Sandbox Test is only unlocked when you connect and use a Cloud AI Provider (e.g. Anthropic Claude, OpenAI Codex, OpenCode, or Pi).');
-  }
   const project = (await readProjects()).find((p) => p.id === projectId);
   if (!project) throw new Error('Project not found.');
-  return runExtremeTest({
+  const res = await runExtremeTest({
     project,
     BrowserWindow,
     session,
     onEvent: (ev) => broadcast('extreme-test-event', ev),
   });
+  if (!res?.cancelled) {
+    const fCount = res?.stats?.findings || 0;
+    showOsToast(
+      `Arena Odyssey finished · ${project.name}`,
+      fCount > 0 ? `Detected ${fCount} runtime/visual issue(s) across ${res?.stats?.pages || 1} page(s).` : `Clean run across ${res?.stats?.pages || 1} page(s) with 0 runtime issues.`,
+    );
+  }
+  return res;
 });
 ipc('stop-extreme-test', async (_event, projectId) => stopExtremeTest(projectId));
 ipc('start-npc-swarm', async (_event, payload) => {
@@ -669,6 +684,13 @@ ipc('toggle-watch-project', async (_event, id) => {
       try {
         const res = await scanProjectRoot(project.root, project.kind, { onlyFiles: files, bugsOnly: true });
         broadcast('watch-scan-update', { projectId: id, files, findingsCount: res.findings.length, score: res.score, durationMs: res.durationMs });
+        const urgent = res.findings.filter((f) => f.severity === 'critical' || f.severity === 'high');
+        if (urgent.length > 0) {
+          showOsToast(
+            `OSIEN Watch · ${project.name}`,
+            `${urgent.length} critical/high finding(s) in ${files[0]}: ${urgent[0].title}`,
+          );
+        }
       } catch (err) {
         void err;
       }
@@ -691,6 +713,55 @@ ipc('download-app-update', async (_event, updateInfo) => {
     setTimeout(() => { app.quit(); }, 1200);
   }
   return res;
+});
+ipc('scan-git-history', async (_event, payload) => {
+  const projectId = typeof payload === 'string' ? payload : payload?.projectId;
+  const maxCommits = typeof payload === 'object' ? (payload?.maxCommits || 50) : 50;
+  const project = (await readProjects()).find((p) => p.id === projectId);
+  if (!project) throw new Error('Project not found.');
+  if (/^https?:\/\//i.test(project.root)) {
+    throw new Error('Git history secret scan only applies to local Git repositories.');
+  }
+  return scanGitHistorySecrets(project.root, { maxCommits });
+});
+ipc('audit-supply-chain', async (_event, projectId) => {
+  const project = (await readProjects()).find((p) => p.id === projectId);
+  if (!project) throw new Error('Project not found.');
+  if (/^https?:\/\//i.test(project.root)) {
+    throw new Error('Supply-chain & SBOM audit only applies to local project folders.');
+  }
+  return auditSupplyChain(project.root);
+});
+ipc('export-sbom', async (_event, projectId) => {
+  const project = (await readProjects()).find((p) => p.id === projectId);
+  if (!project) throw new Error('Project not found.');
+  const audit = await auditSupplyChain(project.root);
+  const safeName = project.name.replace(/[^a-zA-Z0-9._-]+/g, '-');
+  const picked = await dialog.showSaveDialog({
+    title: 'Export CycloneDX 1.5 SBOM',
+    defaultPath: `${safeName}-sbom.cdx.json`,
+    filters: [{ name: 'CycloneDX SBOM JSON', extensions: ['json'] }],
+  });
+  if (picked.canceled || !picked.filePath) return { saved: false };
+  await fs.writeFile(picked.filePath, JSON.stringify(audit.sbom, null, 2), 'utf8');
+  return { saved: true, filePath: picked.filePath, components: audit.totalDependencies };
+});
+ipc('get-precommit-hook-status', async (_event, projectId) => {
+  const project = (await readProjects()).find((p) => p.id === projectId);
+  if (!project || /^https?:\/\//i.test(project.root)) return { isGitRepo: false, installed: false };
+  return getPreCommitHookStatus(project.root);
+});
+ipc('toggle-precommit-hook', async (_event, projectId) => {
+  const project = (await readProjects()).find((p) => p.id === projectId);
+  if (!project) throw new Error('Project not found.');
+  const cur = await getPreCommitHookStatus(project.root);
+  if (cur.installed) {
+    await removePreCommitHook(project.root);
+    return { isGitRepo: true, installed: false };
+  }
+  await installPreCommitHook(project.root, { failOn: 'critical' });
+  showOsToast('Pre-Commit Guard Installed', `${project.name} will now block commits with Critical bugs or leaked secrets.`);
+  return { isGitRepo: true, installed: true };
 });
 ipc('list-rules', async () => {
   const aiCfg = await readAiConfig();

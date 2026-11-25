@@ -62,6 +62,11 @@ contextBridge.exposeInMainWorld('deepcheck', {
     ipcRenderer.on('update-download-progress', listener);
     return () => ipcRenderer.removeListener('update-download-progress', listener);
   },
+  scanGitHistory: (payload) => ipcRenderer.invoke('scan-git-history', payload),
+  auditSupplyChain: (projectId) => ipcRenderer.invoke('audit-supply-chain', projectId),
+  exportSbom: (projectId) => ipcRenderer.invoke('export-sbom', projectId),
+  getPreCommitHookStatus: (projectId) => ipcRenderer.invoke('get-precommit-hook-status', projectId),
+  togglePreCommitHook: (projectId) => ipcRenderer.invoke('toggle-precommit-hook', projectId),
   exportReport: (payload) => ipcRenderer.invoke('export-report', payload),
   runProjectTests: (id) => ipcRenderer.invoke('run-project-tests', id),
   runProjectTestFile: (payload) => ipcRenderer.invoke('run-project-test-file', payload),

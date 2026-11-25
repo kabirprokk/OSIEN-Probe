@@ -19,6 +19,9 @@ const {
 const { checkAiHealth } = require('../electron/ai-review.cjs');
 const { scanLiveUrl, generateWebRemediation } = require('../electron/web-auditor.cjs');
 const { runNpcSwarmTest } = require('../electron/npc-swarm-tester.cjs');
+const { scanGitHistorySecrets } = require('../electron/git-history-scanner.cjs');
+const { auditSupplyChain } = require('../electron/supply-chain-auditor.cjs');
+const { getPreCommitHookStatus, installPreCommitHook, removePreCommitHook } = require('../electron/git-hooks.cjs');
 
 const C = {
   reset: '\x1b[0m',
@@ -47,6 +50,9 @@ Usage:
   probe                               Launch interactive Terminal UI (all app options)
   probe scan [path] [options]         Scan a project directory
   probe npc [url-or-path] [options]   Simulate 100+ NPC users to stress-test & find bugs
+  probe secrets-history [path]        Scan Git commit history for leaked secrets
+  probe sbom [path] [--out file.json] Audit supply chain (typosquats/licenses/scripts) & export CycloneDX SBOM
+  probe hook <install|remove|status>  Manage fast 1-click Git pre-commit guard
   probe rules [options]               List available rules and CWE mappings
   probe ai-status                     Check local Ollama AI review availability
   probe mcp                           Start the stdio MCP server (osien-probe-mcp)
@@ -117,9 +123,12 @@ function parseArgs(argv) {
     else if (arg === '--fail-on' && argv[i + 1]) opts.failOn = argv[++i];
     else if (!arg.startsWith('-')) positional.push(arg);
   }
-  if (['scan', 'npc', 'rules', 'ai-status', 'menu', 'tui', 'ui', 'mcp'].includes(positional[0])) {
+  if (['scan', 'npc', 'secrets-history', 'sbom', 'hook', 'rules', 'ai-status', 'menu', 'tui', 'ui', 'mcp'].includes(positional[0])) {
     const cmd = positional.shift();
     opts.command = cmd === 'tui' || cmd === 'ui' ? 'menu' : cmd;
+  }
+  if (opts.command === 'hook') {
+    opts.hookAction = positional.shift() || 'status';
   }
   if (positional[0]) opts.target = positional[0];
   if (positional[1] && kinds.includes(positional[1])) opts.kind = positional[1];
@@ -340,6 +349,58 @@ async function run() {
     } else {
       console.log(`OSIEN Probe rules for "${opts.kind}" (${rules.length} rules):`);
       for (const r of rules) console.log(`- [${r.severity.toUpperCase()}] ${r.id} (${r.cwe}, ${r.lang}): ${r.title}`);
+    }
+    return;
+  }
+
+  if (opts.command === 'secrets-history') {
+    const root = path.resolve(opts.target);
+    const res = await scanGitHistorySecrets(root, { maxCommits: 50 });
+    if (opts.format === 'json') {
+      console.log(JSON.stringify(res, null, 2));
+    } else {
+      console.log(`OSIEN Probe Git History Secret Scan · ${root}`);
+      console.log(`Commits scanned: ${res.commitsScanned} · Leaks found: ${res.findings.length}`);
+      for (const f of res.findings) {
+        console.log(`[${f.severity.toUpperCase()}] ${f.title} (${f.status}) — ${f.file} @ ${f.commitHash} (${f.commitDate}) ${f.redactedPreview}`);
+      }
+    }
+    if (res.findings.length > 0 && opts.failOn) process.exit(1);
+    return;
+  }
+
+  if (opts.command === 'sbom') {
+    const root = path.resolve(opts.target);
+    const res = await auditSupplyChain(root);
+    if (opts.out) {
+      await fs.mkdir(path.dirname(path.resolve(opts.out)), { recursive: true });
+      await fs.writeFile(path.resolve(opts.out), JSON.stringify(res.sbom, null, 2), 'utf8');
+      console.log(`CycloneDX 1.5 SBOM saved to ${path.resolve(opts.out)} (${res.totalDependencies} components)`);
+    } else if (opts.format === 'json') {
+      console.log(JSON.stringify(res, null, 2));
+    } else {
+      console.log(`OSIEN Probe Supply-Chain & SBOM Audit · ${res.projectName}`);
+      console.log(`Dependencies: ${res.totalDependencies} · Installed inspected: ${res.inspectedInstalled} · Findings: ${res.findings.length}`);
+      for (const f of res.findings) {
+        console.log(`[${f.severity.toUpperCase()}] ${f.title} (${f.file})`);
+        if (f.detail) console.log(`    ${f.detail}`);
+      }
+    }
+    if (res.findings.length > 0 && opts.failOn) process.exit(1);
+    return;
+  }
+
+  if (opts.command === 'hook') {
+    const root = path.resolve(opts.target);
+    if (opts.hookAction === 'install') {
+      const r = await installPreCommitHook(root, { failOn: opts.failOn || 'critical' });
+      console.log(`Installed OSIEN Probe pre-commit hook at ${r.hookPath} (blocks on ${r.failOn}+ findings).`);
+    } else if (opts.hookAction === 'remove') {
+      const r = await removePreCommitHook(root);
+      console.log(r.removed ? `Removed OSIEN Probe pre-commit hook from ${r.hookPath}.` : 'No OSIEN Probe pre-commit hook was installed.');
+    } else {
+      const s = await getPreCommitHookStatus(root);
+      console.log(s.isGitRepo ? `Pre-commit guard: ${s.installed ? 'INSTALLED' : 'NOT INSTALLED'} (${s.hookPath})` : 'Not a Git repository.');
     }
     return;
   }

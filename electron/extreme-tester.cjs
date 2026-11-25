@@ -61,31 +61,118 @@ async function dirExists(target) {
   }
 }
 
-async function detectWebEntry(root) {
-  const pkgPath = path.join(root, 'package.json');
-  const hasNodeModules = await dirExists(path.join(root, 'node_modules'));
-  if (await fileExists(pkgPath) && hasNodeModules) {
+function isWebDevScript(cmd) {
+  const s = String(cmd || '').toLowerCase();
+  if (!s) return false;
+  if (/\belectron\b/.test(s) && !/\bvite\b|\bnext\b|\bwebpack\b|\bparcel\b/.test(s)) return false;
+  return /\b(vite|next|nuxt|astro|remix|react-scripts|webpack|parcel|svelte|quasar|ng serve|http-server|serve|live-server|wrangler|gatsby|storybook|node\s)/i.test(s);
+}
+
+async function detectWebEntryInDir(dir) {
+  const pkgPath = path.join(dir, 'package.json');
+  const hasNodeModules = await dirExists(path.join(dir, 'node_modules'));
+  if (await fileExists(pkgPath)) {
     try {
       const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf8'));
       const scripts = pkg.scripts || {};
-      const scriptName = scripts.dev ? 'dev' : scripts.preview ? 'preview' : scripts.start ? 'start' : null;
-      if (scriptName) {
-        return { mode: 'npm', scriptName, command: `npm run ${scriptName}` };
+      const preferred = ['dev', 'preview', 'start'].find((name) => scripts[name] && isWebDevScript(scripts[name]));
+      if (preferred) {
+        if (hasNodeModules) {
+          return { mode: 'npm', cwd: dir, scriptName: preferred, command: `npm run ${preferred}` };
+        }
+        // Check if a built static bundle already exists before requiring npm install
+        for (const candidate of ['dist/index.html', 'build/index.html', 'out/index.html']) {
+          const full = path.join(dir, candidate);
+          if (await fileExists(full)) {
+            return { mode: 'static', entryDir: path.dirname(full), entryFile: candidate };
+          }
+        }
+        return { mode: 'missing-deps', cwd: dir, scriptName: preferred, command: `npm run ${preferred}` };
       }
     } catch {
       // Fall through to static detection when package.json cannot be parsed.
     }
   }
   for (const candidate of ['dist/index.html', 'build/index.html', 'out/index.html', 'index.html', 'public/index.html']) {
-    const full = path.join(root, candidate);
+    const full = path.join(dir, candidate);
     if (await fileExists(full)) {
       return { mode: 'static', entryDir: path.dirname(full), entryFile: candidate };
     }
   }
+  return null;
+}
+
+async function detectWebEntry(root) {
+  const direct = await detectWebEntryInDir(root);
+  if (direct && direct.mode !== 'missing-deps') return direct;
+  // Also check common monorepo/sub-app web folders (e.g. web/, client/, frontend/, app/)
+  for (const sub of ['web', 'client', 'frontend', 'site', 'app']) {
+    const subDir = path.join(root, sub);
+    if (await dirExists(subDir)) {
+      const subEntry = await detectWebEntryInDir(subDir);
+      if (subEntry) return subEntry;
+    }
+  }
+  if (direct) return direct;
+  const pkgPath = path.join(root, 'package.json');
+  const hasNodeModules = await dirExists(path.join(root, 'node_modules'));
   if (await fileExists(pkgPath) && !hasNodeModules) {
-    return { mode: 'missing-deps' };
+    return { mode: 'missing-deps', cwd: root, scriptName: 'dev', command: 'npm run dev' };
   }
   return { mode: 'static', entryDir: root, entryFile: null };
+}
+
+function autoInstallProjectDeps(cwd, onLog) {
+  return new Promise((resolve, reject) => {
+    const env = buildSandboxEnv();
+    const child = process.platform === 'win32'
+      ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm.cmd install --no-audit --no-fund'], {
+          cwd,
+          windowsHide: true,
+          env,
+        })
+      : spawn('npm', ['install', '--no-audit', '--no-fund'], {
+          cwd,
+          windowsHide: true,
+          env,
+        });
+    const timer = setTimeout(() => {
+      killProcessTree(child);
+      reject(new Error('Timed out auto-installing dependencies (npm install).'));
+    }, 180000);
+    const forward = (chunk) => {
+      const text = stripAnsi(chunk.toString('utf8'));
+      for (const line of text.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (trimmed) onLog(trimmed);
+      }
+    };
+    child.stdout.on('data', forward);
+    child.stderr.on('data', forward);
+    child.on('error', (err) => { clearTimeout(timer); reject(err); });
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(true);
+      else reject(new Error(`Auto-install exited with code ${code}`));
+    });
+  });
+}
+
+async function waitForHttpReady(urlStr, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 1800);
+      const res = await fetch(urlStr, { method: 'GET', signal: ctrl.signal });
+      clearTimeout(t);
+      if (res.status > 0) return true;
+    } catch {
+      // Server still booting.
+    }
+    await new Promise((r) => setTimeout(r, 350));
+  }
+  return false;
 }
 
 function startStaticSandboxServer(entryDir) {
@@ -207,12 +294,15 @@ function startNpmSandboxServer(root, scriptName, onLog) {
           if (recentLogs.length > 20) recentLogs.shift();
           onLog(trimmed);
         }
-        const match = trimmed.match(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):\d{2,5}[^\s]*/i);
+        const match = trimmed.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):\d{2,5}[^\s]*/i);
         if (match && !settled) {
           settled = true;
           clearTimeout(timeout);
+          const normalizedUrl = match[0]
+            .replace(/\/\/0\.0\.0\.0:/i, '//127.0.0.1:')
+            .replace(/\/\/\[::1?\]:/i, '//127.0.0.1:');
           resolve({
-            url: match[0],
+            url: normalizedUrl,
             close: async () => {
               killProcessTree(child);
             },
@@ -260,7 +350,32 @@ function buildExtremeProbeScript(stepIndex) {
       states: new Set(),
       lastStateSig: '',
       pendingFormSubmit: null,
+      runtimeErrors: [],
+      trapsInstalled: false,
     });
+
+    if (!mem.trapsInstalled) {
+      mem.trapsInstalled = true;
+      window.addEventListener('error', (ev) => {
+        mem.runtimeErrors.push({
+          ruleId: 'extreme-uncaught-exception',
+          title: 'Uncaught runtime exception',
+          severity: 'high',
+          cwe: 'CWE-755',
+          detail: String(ev.message || 'Unknown error').slice(0, 180),
+        });
+      });
+      window.addEventListener('unhandledrejection', (ev) => {
+        const msg = ev.reason?.message || String(ev.reason || 'Unhandled promise rejection');
+        mem.runtimeErrors.push({
+          ruleId: 'extreme-unhandled-rejection',
+          title: 'Unhandled Promise rejection in page',
+          severity: 'high',
+          cwe: 'CWE-755',
+          detail: String(msg).slice(0, 180),
+        });
+      });
+    }
 
     const moveCursor = (el, pulse = false) => {
       const r = el.getBoundingClientRect();
@@ -346,6 +461,27 @@ function buildExtremeProbeScript(stepIndex) {
           cwe: 'CWE-79',
           detail: getLabel(a),
         });
+      }
+      // Accessibility audit: unlabeled interactive buttons and missing img alt
+      let unlabeledButtons = 0;
+      for (const btn of document.querySelectorAll('button')) {
+        if (!isVisible(btn)) continue;
+        const txt = (btn.innerText || btn.getAttribute('aria-label') || btn.getAttribute('title') || '').trim();
+        if (!txt) unlabeledButtons++;
+      }
+      if (unlabeledButtons > 0) {
+        findings.push({
+          ruleId: 'extreme-a11y-unlabeled-button',
+          title: unlabeledButtons + ' interactive button(s) missing accessible label',
+          severity: 'low',
+          cwe: 'CWE-1059',
+          detail: 'Add aria-label or visible text to icon-only buttons at ' + location.pathname,
+        });
+      }
+      if (mem.runtimeErrors && mem.runtimeErrors.length > 0) {
+        while (mem.runtimeErrors.length > 0) {
+          findings.push(mem.runtimeErrors.shift());
+        }
       }
     };
 
@@ -503,33 +639,43 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
   };
 
   const emittedFindings = new Set();
+  const collectedFindings = [];
   const pushFinding = (f) => {
     const key = `${f.ruleId}:${f.detail || f.title}`;
     if (emittedFindings.has(key)) return;
     emittedFindings.add(key);
+    collectedFindings.push(f);
     emit('finding', { finding: f });
   };
 
   try {
-    emit('log', { level: 'info', text: `PC profile: ${profile.cpuCores} cores, ${profile.totalMemGb} GB RAM (${profile.tier} tier · ${profile.maxSteps} autonomous steps + OSIEN Vision-22M AI)` });
+    emit('log', { level: 'info', text: `PC profile: ${profile.cpuCores} cores, ${profile.totalMemGb} GB RAM (${profile.tier} tier · ${profile.maxSteps} autonomous steps + Mirage-22M Vision AI)` });
     const isRemoteUrl = /^https?:\/\//i.test(String(project.root || '').trim());
     let server;
     if (isRemoteUrl) {
       server = { url: String(project.root).trim(), close: async () => {} };
-      emit('log', { level: 'info', text: `Connecting Extreme Live Sandbox & Vision-22M AI to ${server.url}…` });
+      emit('log', { level: 'info', text: `Connecting Extreme Live Sandbox & Mirage-22M Vision AI to ${server.url}…` });
     } else {
-      const entry = await detectWebEntry(project.root);
+      let entry = await detectWebEntry(project.root);
       if (entry.mode === 'missing-deps') {
-        throw new Error('Dependencies are not installed (missing node_modules and no built dist/index.html). Run "npm install" in this project or run a Traditional Test.');
+        emit('log', { level: 'info', text: `Auto-installing dependencies in ${path.basename(entry.cwd || project.root)} via npm install…` });
+        try {
+          await autoInstallProjectDeps(entry.cwd || project.root, (line) => emit('log', { level: 'server', text: line }));
+          entry = await detectWebEntry(project.root);
+        } catch (installErr) {
+          emit('log', { level: 'warn', text: `Auto-install skipped (${installErr.message}); falling back to static sandbox.` });
+          entry = { mode: 'static', entryDir: project.root, entryFile: null };
+        }
       }
       emit('log', { level: 'info', text: entry.mode === 'npm' ? `Starting sandboxed dev server (${entry.command})…` : `Starting isolated static sandbox server on 127.0.0.1…` });
 
       server = entry.mode === 'npm'
-        ? await startNpmSandboxServer(project.root, entry.scriptName, (line) => emit('log', { level: 'server', text: line }))
+        ? await startNpmSandboxServer(entry.cwd || project.root, entry.scriptName, (line) => emit('log', { level: 'server', text: line }))
         : await startStaticSandboxServer(entry.entryDir);
+      await waitForHttpReady(server.url, 12000);
     }
     state.server = server;
-    if (state.cancelled) return { cancelled: true };
+    if (state.cancelled) return { cancelled: true, findings: collectedFindings };
 
     const targetUrl = new URL(server.url);
     const targetPort = targetUrl.port;
@@ -613,6 +759,30 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
     state.win = win;
 
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    if (typeof win.webContents.setFrameRate === 'function') {
+      win.webContents.setFrameRate(15);
+    }
+    let latestPaintedFrame = null;
+    win.webContents.on('paint', (_event, _dirty, image) => {
+      if (image && !image.isEmpty()) latestPaintedFrame = image;
+    });
+    const grabFrame = async () => {
+      if (latestPaintedFrame && !latestPaintedFrame.isEmpty()) return latestPaintedFrame;
+      if (win.isDestroyed()) return null;
+      const cap = await win.webContents.capturePage();
+      return cap && !cap.isEmpty() ? cap : null;
+    };
+    win.webContents.on('did-fail-load', (_e, errorCode, errorDesc, validatedURL, isMainFrame) => {
+      if (isMainFrame && errorCode !== -3) {
+        pushFinding({
+          ruleId: 'extreme-load-failure',
+          title: `Page failed to load (${errorDesc})`,
+          severity: 'high',
+          cwe: 'CWE-703',
+          detail: `${validatedURL || server.url} (code ${errorCode})`,
+        });
+      }
+    });
     win.webContents.on('console-message', (_e, level, msg, line, sourceId) => {
       if (level >= 3) {
         pushFinding({
@@ -634,8 +804,19 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
       });
     });
 
+    const loadStart = Date.now();
     await win.loadURL(server.url);
-    emit('log', { level: 'info', text: 'Waiting for page hydration and interactive UI…' });
+    const loadMs = Date.now() - loadStart;
+    if (loadMs > 4500) {
+      pushFinding({
+        ruleId: 'extreme-slow-initial-load',
+        title: `Slow initial page load (${(loadMs / 1000).toFixed(1)}s)`,
+        severity: 'low',
+        cwe: 'CWE-400',
+        detail: `${server.url} took ${loadMs}ms to reach initial load.`,
+      });
+    }
+    emit('log', { level: 'info', text: `Loaded ${server.url} in ${loadMs}ms — waiting for UI hydration…` });
     for (let w = 0; w < 24; w++) {
       if (state.cancelled || win.isDestroyed()) break;
       try {
@@ -647,9 +828,11 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
           return { ready, ok: ready && !isLoading && (interactive > 0 || textLen > 80) };
         })()`, true);
         if (!win.isDestroyed()) {
-          const frame = await win.webContents.capturePage();
-          const jpeg = frame.resize({ width: 760, quality: 'good' }).toJPEG(72);
-          emit('frame', { dataUrl: `data:image/jpeg;base64,${jpeg.toString('base64')}` });
+          const frame = await grabFrame();
+          if (frame) {
+            const jpeg = frame.resize({ width: 760, quality: 'good' }).toJPEG(72);
+            emit('frame', { dataUrl: `data:image/jpeg;base64,${jpeg.toString('base64')}` });
+          }
         }
         if (ready?.ok && w >= 3) break;
       } catch (err) {
@@ -662,9 +845,26 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
     let inputsFuzzed = 0;
     let prevVisionEmbedding = null;
     const routes = new Set([server.url]);
+    const mobileSwitchStep = Math.max(4, Math.floor(profile.maxSteps * 0.65));
+    const desktopRestoreStep = Math.min(profile.maxSteps - 2, mobileSwitchStep + 6);
 
     for (let step = 0; step < profile.maxSteps; step++) {
       if (state.cancelled || win.isDestroyed()) break;
+      if (step === mobileSwitchStep && !win.isDestroyed()) {
+        try {
+          win.setSize(390, 844);
+          emit('log', { level: 'info', text: 'Switching sandbox viewport to Mobile (390×844) for responsive overflow & tap-target audit…' });
+        } catch (err) {
+          void err;
+        }
+      } else if (step === desktopRestoreStep && !win.isDestroyed()) {
+        try {
+          win.setSize(1120, 740);
+          emit('log', { level: 'info', text: 'Restoring Desktop viewport (1120×740)…' });
+        } catch (err) {
+          void err;
+        }
+      }
       try {
         const res = await win.webContents.executeJavaScript(buildExtremeProbeScript(step), true);
         if (res) {
@@ -717,33 +917,35 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
             };
           })()`, true).catch(() => ({}));
 
-          const frame = await win.webContents.capturePage();
-          const jpeg = frame.resize({ width: 760, quality: 'good' }).toJPEG(72);
-          const visionSample = frame.resize({ width: 256, height: 160, quality: 'good' });
-          const vSize = visionSample.getSize();
-          const visionReport = analyzeFrameWithLocalVision({
-            rgbaBuffer: visionSample.toBitmap(),
-            width: vSize.width,
-            height: vSize.height,
-            prevEmbedding: prevVisionEmbedding,
-            domMetrics,
-          });
-          prevVisionEmbedding = visionReport.embedding;
-          for (const vf of visionReport.findings) pushFinding(vf);
-          if (step % 4 === 0) {
-            emit('log', { level: 'info', text: visionReport.caption });
+          const frame = await grabFrame();
+          if (frame) {
+            const jpeg = frame.resize({ width: 760, quality: 'good' }).toJPEG(72);
+            const visionSample = frame.resize({ width: 256, height: 160, quality: 'good' });
+            const vSize = visionSample.getSize();
+            const visionReport = analyzeFrameWithLocalVision({
+              rgbaBuffer: visionSample.toBitmap(),
+              width: vSize.width,
+              height: vSize.height,
+              prevEmbedding: prevVisionEmbedding,
+              domMetrics,
+            });
+            prevVisionEmbedding = visionReport.embedding;
+            for (const vf of visionReport.findings) pushFinding(vf);
+            if (step % 4 === 0) {
+              emit('log', { level: 'info', text: visionReport.caption });
+            }
+            emit('frame', {
+              dataUrl: `data:image/jpeg;base64,${jpeg.toString('base64')}`,
+              vision: {
+                caption: visionReport.caption,
+                activePatchRatio: visionReport.activePatchRatio,
+                dominantBrightness: visionReport.dominantBrightness,
+                contrastStd: visionReport.contrastStd,
+                visualDelta: visionReport.visualDelta,
+                heatmap64: visionReport.heatmap64,
+              },
+            });
           }
-          emit('frame', {
-            dataUrl: `data:image/jpeg;base64,${jpeg.toString('base64')}`,
-            vision: {
-              caption: visionReport.caption,
-              activePatchRatio: visionReport.activePatchRatio,
-              dominantBrightness: visionReport.dominantBrightness,
-              contrastStd: visionReport.contrastStd,
-              visualDelta: visionReport.visualDelta,
-              heatmap64: visionReport.heatmap64,
-            },
-          });
         } catch (err) {
           void err;
         }
@@ -754,10 +956,12 @@ async function runExtremeTest({ project, BrowserWindow, session, onEvent }) {
     emit('done', {
       cancelled: state.cancelled,
       stats: { pages: routes.size, clicks, inputsFuzzed, findings: emittedFindings.size },
+      findings: collectedFindings,
     });
     return {
       cancelled: state.cancelled,
       stats: { pages: routes.size, clicks, inputsFuzzed, findings: emittedFindings.size },
+      findings: collectedFindings,
     };
   } finally {
     await cleanupRunState(state);
